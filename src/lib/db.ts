@@ -41,6 +41,8 @@ export const mapRepository = (row: DbRow): Repository => ({
   lastReleaseId: nullableString(row.last_release_id),
   starGrowth: row.star_growth === null || row.star_growth === undefined ? null : Number(row.star_growth),
   growthDays: row.growth_days === null || row.growth_days === undefined ? null : Number(row.growth_days),
+  growth1d: row.growth_1d === null || row.growth_1d === undefined ? null : Number(row.growth_1d),
+  growth7d: row.growth_7d === null || row.growth_7d === undefined ? null : Number(row.growth_7d),
 });
 
 export const mapCatalogItem = (row: DbRow): CatalogItem => {
@@ -49,6 +51,8 @@ export const mapCatalogItem = (row: DbRow): CatalogItem => {
     title: String(row.event_title), publishedAt: dateString(row.published_at), observedAt: dateString(row.observed_at),
     releaseId: nullableString(row.release_id), releaseTag: nullableString(row.release_tag),
     releaseUrl: nullableString(row.release_url), releaseBody: nullableString(row.release_body),
+    importance: row.importance === "major" ? "major" : "minor",
+    groupedReleaseCount: Number(row.grouped_release_count ?? 1),
   };
   const content: LearningContent | null = row.content_id ? {
     id: String(row.content_id), eventId: event.id, status: row.content_status as LearningContent["status"],
@@ -57,27 +61,48 @@ export const mapCatalogItem = (row: DbRow): CatalogItem => {
     inputHash: nullableString(row.input_hash), promptVersion: String(row.prompt_version ?? "1"),
     inputTokens: row.input_tokens === null || row.input_tokens === undefined ? null : Number(row.input_tokens),
     outputTokens: row.output_tokens === null || row.output_tokens === undefined ? null : Number(row.output_tokens),
+    depth: row.depth === "deep" ? "deep" : "quick",
+    requestedDepth: row.requested_depth === "deep" ? "deep" : "quick",
+    errorSummary: nullableString(row.error_summary), errorKind: nullableString(row.error_kind),
+    attempts: Number(row.attempts ?? 0), nextRetryAt: nullableString(row.next_retry_at),
+    versions: (row.versions ?? []) as LearningContent["versions"],
   } : null;
   return { repository: mapRepository(row), event, content };
 };
 
 export const ITEM_SELECT = `r.*, e.id AS event_id, e.kind, e.title AS event_title,
-  e.published_at, e.observed_at, e.release_id, e.release_tag, e.release_url, e.release_body,
+  e.published_at, e.observed_at, e.release_id, e.release_tag, e.release_url, e.release_body, e.importance,
   c.id AS content_id, c.status AS content_status, c.article, c.model, c.generated_at,
-  c.input_hash, c.prompt_version, c.input_tokens, c.output_tokens,
+  c.input_hash, c.prompt_version, c.input_tokens, c.output_tokens, c.depth, c.requested_depth,
+  c.error_summary, c.error_kind, c.attempts, c.next_retry_at,
   COALESCE((SELECT jsonb_agg(jsonb_build_object(
-    'url', s.url, 'title', s.title, 'kind', s.kind, 'fetchedAt', s.fetched_at, 'revision', s.revision
+    'url', s.url, 'title', s.title, 'kind', s.kind, 'fetchedAt', s.fetched_at, 'revision', s.revision, 'readingRange', s.reading_range
   ) ORDER BY s.id) FROM content_sources s WHERE s.content_id = c.id), '[]'::jsonb) AS sources,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('id',v.id,'article',v.article,'sources',v.sources,
+    'model',v.model,'generatedAt',v.generated_at,'depth',v.depth) ORDER BY v.generated_at DESC)
+    FROM content_versions v WHERE v.content_id=c.id), '[]'::jsonb) AS versions,
+  (SELECT count(*) FROM feed_events siblings WHERE e.kind='release' AND e.importance='minor'
+    AND siblings.repository_id=e.repository_id AND siblings.kind='release' AND siblings.importance='minor'
+    AND date_trunc('week',siblings.published_at AT TIME ZONE 'UTC')=date_trunc('week',e.published_at AT TIME ZONE 'UTC')) AS grouped_release_count,
   latest.stars - baseline.stars AS star_growth,
-  round(EXTRACT(EPOCH FROM (latest.sampled_at - baseline.sampled_at)) / 86400.0, 4) AS growth_days`;
+  round(EXTRACT(EPOCH FROM (latest.sampled_at-baseline.sampled_at))/86400.0,4) AS growth_days,
+  round(EXTRACT(EPOCH FROM (latest.sampled_at-day_baseline.sampled_at))/86400.0,4) AS growth_1d_days,
+  latest.stars - day_baseline.stars AS growth_1d,
+  latest.stars - baseline.stars AS growth_7d`;
 
 export const ITEM_JOINS = `JOIN repositories r ON r.id = e.repository_id
   LEFT JOIN learning_contents c ON c.event_id = e.id
   LEFT JOIN LATERAL (
-    SELECT stars, sampled_at FROM repository_snapshots WHERE repository_id = r.id ORDER BY sampled_at DESC LIMIT 1
+    SELECT stars, sampled_at, sample_day FROM repository_snapshots WHERE repository_id = r.id
+      AND sampled_at >= now() - interval '48 hours' ORDER BY sampled_at DESC LIMIT 1
   ) latest ON true
   LEFT JOIN LATERAL (
     SELECT stars, sampled_at FROM repository_snapshots
-    WHERE repository_id = r.id AND sampled_at < latest.sampled_at
-    ORDER BY (sampled_at <= latest.sampled_at - interval '7 days') DESC, sampled_at DESC LIMIT 1
-  ) baseline ON true`;
+    WHERE repository_id = r.id AND sampled_at BETWEEN latest.sampled_at-interval '170 hours' AND latest.sampled_at-interval '166 hours'
+    ORDER BY abs(EXTRACT(EPOCH FROM (sampled_at-(latest.sampled_at-interval '168 hours')))) LIMIT 1
+  ) baseline ON true
+  LEFT JOIN LATERAL (
+    SELECT stars, sampled_at FROM repository_snapshots
+    WHERE repository_id = r.id AND sampled_at BETWEEN latest.sampled_at-interval '26 hours' AND latest.sampled_at-interval '22 hours'
+    ORDER BY abs(EXTRACT(EPOCH FROM (sampled_at-(latest.sampled_at-interval '24 hours')))) LIMIT 1
+  ) day_baseline ON true`;

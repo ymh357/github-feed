@@ -3,16 +3,30 @@ name: 每日项目学习更新
 on:
   schedule:
     - cron: "23 22 * * *"
+    - cron: "17 */6 * * *"
+    - cron: "43 */3 * * *"
   workflow_dispatch:
     inputs:
-      discovery_only:
-        description: "仅同步项目与版本，不调用模型"
+      stage:
+        description: "执行阶段：发现、同步、生成可独立续跑"
+        type: choice
+        options: [all, discover, sync, generate]
+        default: all
+      depth:
+        description: "生成深度；both 根据待处理队列自动补深入解读"
+        type: choice
+        options: [both, quick, deep]
+        default: both
+      repository:
+        description: "可选，指定已收录项目 owner/name"
+        type: string
         required: false
+      discovery_only:
+        description: "兼容选项：仅同步，不调用模型"
         type: boolean
         default: false
       limit:
-        description: "本次发现、同步及生成的各阶段处理上限（1..200）"
-        required: false
+        description: "各阶段处理上限（1..200），不限制阅览"
         type: string
         default: "50"
 
@@ -20,7 +34,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: github-feed-collection
+  group: github-feed-${{ github.event.schedule || inputs.stage || 'all' }}
   cancel-in-progress: false
 
 jobs:
@@ -35,6 +49,10 @@ jobs:
       COLLECTION_RUNTIME_SECONDS: "1200"
       COLLECTION_LIMIT: ${{ inputs.limit || '50' }}
       DISCOVERY_ONLY: ${{ inputs.discovery_only || 'false' }}
+      REQUESTED_STAGE: ${{ inputs.stage || 'all' }}
+      REQUESTED_DEPTH: ${{ inputs.depth || 'both' }}
+      REQUESTED_REPOSITORY: ${{ inputs.repository || '' }}
+      EVENT_SCHEDULE: ${{ github.event.schedule || '' }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
@@ -44,11 +62,17 @@ jobs:
       - run: npm ci
       - name: 初始化数据库
         run: npm run db:migrate
-      - name: 发现、同步和生成学习内容
+      - name: 执行独立采集阶段
         shell: bash
         run: |
-          arguments=(--limit "$COLLECTION_LIMIT")
-          if [[ "$DISCOVERY_ONLY" == "true" ]]; then
-            arguments+=(--discovery-only)
-          fi
+          stage="$REQUESTED_STAGE"
+          case "$EVENT_SCHEDULE" in
+            '23 22 * * *') stage=discover ;;
+            '17 */6 * * *') stage=sync ;;
+            '43 */3 * * *') stage=generate ;;
+          esac
+          arguments=(--stage "$stage" --limit "$COLLECTION_LIMIT")
+          if [[ "$DISCOVERY_ONLY" == "true" ]]; then arguments+=(--discovery-only); fi
+          if [[ "$REQUESTED_DEPTH" != "both" ]]; then arguments+=(--depth "$REQUESTED_DEPTH"); fi
+          if [[ -n "$REQUESTED_REPOSITORY" ]]; then arguments+=(--repository "$REQUESTED_REPOSITORY"); fi
           npm run collect -- "${arguments[@]}"

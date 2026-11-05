@@ -32,9 +32,9 @@ export const Brand = (): ReactElement => <Link href="/" className="brand" aria-l
   <span>GitHub <strong>Feed</strong><small>你的开源学习流</small></span>
 </Link>;
 
-const itemHref = (item: CatalogItem): string => item.event.kind === "release" ? `/updates/${encodeURIComponent(item.event.id)}` : `/projects/${item.repository.id}`;
+const itemHref = (item: CatalogItem): string => item.event.kind !== "discovery" ? `/updates/${encodeURIComponent(item.event.id)}` : `/projects/${item.repository.id}`;
 
-const ProjectRow = ({ item, read }: { item: CatalogItem; read: boolean }) => {
+const ProjectRow = ({ item, read, progress }: { item: CatalogItem; read: boolean; progress?: string }) => {
   const { repository: repo, event, content } = item;
   const article = content?.article;
   const [owner, ...name] = repo.fullName.split("/");
@@ -53,9 +53,10 @@ const ProjectRow = ({ item, read }: { item: CatalogItem; read: boolean }) => {
           </Link>
         </h2>
         <span className={`event-badge ${event.kind === "release" ? "release" : ""}`}>
-          {event.kind === "release" ? event.releaseTag ?? "版本更新" : "新收录"}
+          {event.kind === "announcement" ? "官方文档变化" : event.kind === "release" ? event.importance === "major" ? `重要版本 ${event.releaseTag ?? ""}` : event.releaseTag ?? "版本更新" : "新收录"}
         </span>
         {read && <span className="read-badge">已读</span>}
+        {progress && progress !== "none" && <span className="read-badge">{progress === "plan" ? "待学习" : progress === "reading" ? "正在学习" : "已实践"}</span>}
       </div>
 
       <p className="project-description">
@@ -69,6 +70,8 @@ const ProjectRow = ({ item, read }: { item: CatalogItem; read: boolean }) => {
         {content?.status === "insufficient_sources" ? "现有资料不足，学习解读尚未发布。" : content?.status === "failed" ? "解读暂未完成，可先查看项目原始资料。" : "学习解读整理中，可先查看项目资料。"}
       </p>}
 
+      {content?.errorSummary && content.status !== "ready" && <p className="content-error-summary">{content.errorSummary}{(content.attempts ?? 0) >= 3 ? " · 已暂停自动重试" : content.nextRetryAt ? ` · ${fullDate(content.nextRetryAt)} 后可重试` : ""}</p>}
+      {(event.groupedReleaseCount ?? 0) > 1 && <p className="grouped-caption">同一周合并 {event.groupedReleaseCount} 个小版本，<Link href={`/projects/${repo.id}`}>查看全部版本动态</Link></p>}
       <div className="project-meta">
         <span className="star-stat" title={`${repo.stars.toLocaleString()} Star`}>
           <Star />
@@ -80,7 +83,7 @@ const ProjectRow = ({ item, read }: { item: CatalogItem; read: boolean }) => {
         </span>}
         <span title={fullDate(event.publishedAt)}>
           {date(event.publishedAt)}
-          {event.kind === "release" ? "发布" : "收录"}
+          {event.kind === "discovery" ? "收录" : "发布"}
         </span>
         {repo.starGrowth !== null && repo.growthDays !== null ? <span className="growth-stat">{repo.starGrowth >= 0 ? "+" : ""}{number(repo.starGrowth)} / {repo.growthDays} 天</span> : <span className="growth-unknown" title="需要两个有效快照才能计算增长">增长待积累</span>}
       </div>
@@ -97,11 +100,11 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
   const router = useRouter();
   const pathname = usePathname();
   const search = useSearchParams();
-  const { favorites, read } = usePersonal();
+  const { favorites, read, learning } = usePersonal();
   const [retry, setRetry] = useState(0);
   const [personalResult, setPersonalResult] = useState<{ key: string; result?: CatalogResult; error?: string } | null>(null);
   const personal = view === "favorites" || (query.readState ?? "all") !== "all";
-  const requestQuery = useMemo(() => ({ ...query, ...(view === "favorites" ? { ids: favorites } : {}), ...(query.readState && query.readState !== "all" ? { readEventIds: read } : {}) }), [query, view, favorites, read]);
+  const requestQuery = useMemo(() => ({ ...query, ...(view === "favorites" ? { ids: favorites, view: "projects" as const } : {}), ...(query.readState && query.readState !== "all" ? { readEventIds: read } : {}) }), [query, view, favorites, read]);
   const requestKey = JSON.stringify(requestQuery);
   useEffect(() => {
     if (!personal) return;
@@ -118,6 +121,21 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
   const resolved: { result?: CatalogResult; error?: string } | null = personal ? personalResult?.key === requestKey ? personalResult : null : { result: initialResult };
   const result = resolved?.result;
   const loading = personal && !resolved;
+  const health = (result ?? initialResult).health;
+  const coverage = (result ?? initialResult).coverage;
+  const coverageRows: Array<{ label: string; page: number; received: number }> = [];
+  try {
+    const scope: unknown = coverage?.scope ? JSON.parse(coverage.scope) : null;
+    if (scope && typeof scope === "object" && "queries" in scope && Array.isArray(scope.queries)) {
+      for (const [index, value] of scope.queries.entries()) {
+        if (!value || typeof value !== "object") continue;
+        const row = value as Record<string, unknown>;
+        const key = typeof row.channel === "string" ? row.channel : "";
+        const label = key === "new-low-star" ? "新生小项目" : key === "recent" ? "近期创建项目" : key === "active-small" ? "活跃小项目" : key.startsWith("active-established") ? "活跃成熟项目" : key.startsWith("established") ? "成熟项目" : key.startsWith("archive") ? "历史项目补采" : `发现渠道 ${index + 1}`;
+        coverageRows.push({ label, page: typeof row.actualPage === "number" ? row.actualPage : 1, received: typeof row.received === "number" ? row.received : 0 });
+      }
+    }
+  } catch { /* A missing coverage summary must not prevent browsing. */ }
   const linkTo = (updates: Record<string, string | null>): string => {
     const next = new URLSearchParams(search.toString());
     next.delete("ids");
@@ -185,6 +203,15 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
         </svg></a>
       </header>
 
+      {health && <section className={`collection-health ${health.lastRunStatus === "failed" || health.stale ? "needs-attention" : ""}`} aria-label="更新状态">
+        <div><strong>{health.stale ? "更新需要检查" : health.lastRunStatus === "running" ? "后台正在更新" : health.lastRunStatus === "failed" ? "最近任务异常" : health.lastRunStatus === "partial" ? "最近任务部分完成" : "持续更新状态"}</strong>
+          <span>{health.lastRunAt ? `最近任务 ${fullDate(health.lastRunAt)}` : "等待首次任务"}</span></div>
+        <p>可读 {health.ready} · 待整理 {health.pending} · 处理中 {health.processing} · 可重试 {health.retryable} · 已暂停 {health.exhausted}</p>
+        <p>最近任务：新增 {health.discovered}，生成 {health.generated}，单项失败 {health.failed}。{health.staleRepositories > 0 ? ` ${health.staleRepositories} 个项目等待补同步。` : ""}</p>
+        <details><summary>查看采集范围与更新说明</summary><p>{coverageRows.length ? `最近记录 ${coverageRows.length} 次分页查询。` : "采集范围随后台任务记录。"}分批读取公开项目，不代表全 GitHub 覆盖；小版本可合并展示。{coverage?.updatedAt ? ` 范围记录于 ${fullDate(coverage.updatedAt)}。` : ""}</p>
+          {coverageRows.length > 0 && <ul>{coverageRows.map((row, index) => <li key={index}>{row.label} · 第 {row.page} 页 · 取得 {row.received} 个候选</li>)}</ul>}
+          <p>{health.lastSuccessfulAt ? `最近有效任务完成：${fullDate(health.lastSuccessfulAt)}。` : "尚无有效完成记录。"} 单项失败不会隐藏已有内容，暂停的内容需维护者核查后恢复。</p></details>
+      </section>}
       <section className="catalog-panel" aria-label="项目列表">
         <div className="catalog-toolbar">
           <form className="search-form" action="/" role="search">
@@ -192,17 +219,17 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
               <circle cx="10.5" cy="10.5" r="6.5" />
               <path d="m16 16 5 5" />
             </svg>
-            <label className="visually-hidden" htmlFor="project-search">搜索项目、介绍或关键词</label>
+            <label className="visually-hidden" htmlFor="project-search">搜索项目与解读全文</label>
             <input
               id="project-search"
               name="q"
               type="search"
-              placeholder="搜索项目、介绍或关键词"
+              placeholder="搜索项目与解读全文"
               defaultValue={query.q}
               key={query.q}
               maxLength={200}
             />
-            {["view", "sort", "language", "minStars", "days", "readState"].map((name) => search.get(name) ? <input key={name} type="hidden" name={name} value={search.get(name)!} /> : null)}
+            {["view", "sort", "language", "minStars", "days", "readState", "contentState", "growthWindow", "groupMinorReleases"].map((name) => search.get(name) ? <input key={name} type="hidden" name={name} value={search.get(name)!} /> : null)}
             <button type="submit">搜索</button>
           </form>
           <label className="sort-control">
@@ -254,7 +281,18 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
               <option value="read">已读</option>
             </select>
           </label>
-          {(query.q || query.language || query.minStars || query.days || query.readState !== "all") && <Link
+          <label>
+            <span>解读</span>
+            <select value={query.contentState ?? ""} onChange={(event) => choose("contentState", event.target.value)}>
+              <option value="">全部内容</option><option value="ready">可阅读</option><option value="pending">整理中</option><option value="failed">整理失败</option>
+            </select>
+          </label>
+          <label>
+            <span>增长窗口</span>
+            <select value={query.growthWindow ?? "7d"} onChange={(event) => choose("growthWindow", event.target.value)}><option value="1d">1 日</option><option value="7d">7 日</option></select>
+          </label>
+          {view === "feed" && <label><span>小版本</span><select value={query.groupMinorReleases === false ? "false" : "true"} onChange={(event) => choose("groupMinorReleases", event.target.value)}><option value="true">合并展示</option><option value="false">逐条展示</option></select></label>}
+          {(query.q || query.language || query.minStars || query.days || query.contentState || query.readState !== "all") && <Link
             className="reset-filter"
             href={view === "favorites" ? "/?view=favorites" : view === "projects" ? "/?view=projects&sort=stars" : "/"}
           >重置筛选</Link>}
@@ -308,7 +346,7 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
           </p>
           <Link className="primary-button" href="/">浏览最新信息</Link>
         </div> : <div className="project-list">
-          {result.items.map((item) => <ProjectRow key={item.event.id} item={item} read={read.includes(item.event.id)} />)}
+          {result.items.map((item) => <ProjectRow key={item.event.id} item={item} read={read.includes(item.event.id)} progress={learning[item.repository.id]?.progress} />)}
         </div>}
 
         {result && result.total > result.pageSize && <nav className="pagination" aria-label="列表分页">

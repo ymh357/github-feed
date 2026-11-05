@@ -45,14 +45,24 @@ export const githubJson = async (path: string): Promise<unknown> => {
         redirect: "error",
       });
     } catch {
-      if (attempt === 2) throw new Error("GitHub 网络请求失败或超时。");
+      if (attempt === 2) throw new GitHubError(503);
       await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
       continue;
     }
     if (response.ok) {
-      const body = await response.text();
-      if (body.length > 4_000_000) throw new Error("GitHub 响应超过安全大小限制。");
-      return JSON.parse(body) as unknown;
+      const reader = response.body?.getReader();
+      if (!reader) throw new GitHubError(503);
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      while (true) {
+        const part = await reader.read().catch(() => { throw new GitHubError(503); });
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > 4_000_000) { await reader.cancel(); throw new Error("GitHub 响应超过安全大小限制。"); }
+        chunks.push(part.value);
+      }
+      const body = Buffer.concat(chunks).toString("utf8");
+      try { return JSON.parse(body) as unknown; } catch { throw new GitHubError(502); }
     }
     let waitSeconds: number | null = null;
     const retryAfter = response.headers.get("retry-after");
@@ -101,53 +111,61 @@ export interface DiscoveryResult {
   repositories: GitHubRepositoryInput[];
   scope: string;
   incomplete: boolean;
+  cursorUpdates?: Array<{ key: string; page: number }>;
 }
 
-export const discoverRepositories = async (limit: number, now: Date = new Date()): Promise<DiscoveryResult> => {
+export interface DiscoveryCursor {
+  getDiscoveryCursor(key: string): Promise<number>;
+  advanceDiscoveryCursor(key: string, page: number): Promise<void>;
+}
+
+export const discoverRepositories = async (limit: number, now: Date = new Date(), cursor?: DiscoveryCursor): Promise<DiscoveryResult> => {
   const day = Math.floor(now.getTime() / 86_400_000);
-  const yearCount = now.getUTCFullYear() - 2008 + 1;
-  const year = 2008 + (day % yearCount);
-  const bands = ["1000..4999", "5000..19999", "20000..99999", ">=100000"];
-  const band = bands[Math.floor(day / yearCount) % bands.length];
-  const recent = new Date(now.getTime() - 90 * 86_400_000).toISOString().slice(0, 10);
-  const page = 1 + (Math.floor(day / (yearCount * bands.length)) % 10);
-  const queries = [
-    `is:public fork:false archived:false stars:>=100 created:>=${recent}`,
-    "is:public fork:false archived:false stars:>=1000",
-    `is:public fork:false archived:false stars:${band} created:${year}-01-01..${year}-12-31`,
+  const year = 2008 + (day % (now.getUTCFullYear() - 2008 + 1));
+  const date = (days: number): string => new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
+  const common = "is:public fork:false archived:false";
+  const partition = `created:${year}-01-01..${year}-12-31`;
+  const channels = [
+    { key: "new-low-star", query: `${common} stars:5..999 created:>=${date(30)}`, sort: "updated" },
+    { key: "recent", query: `${common} stars:>=100 created:>=${date(90)}`, sort: "stars" },
+    { key: "active-small", query: `${common} stars:20..999 pushed:>=${date(7)}`, sort: "updated" },
+    { key: `established-${year}`, query: `${common} stars:>=1000 ${partition}`, sort: "stars" },
+    { key: `active-established-${year}`, query: `${common} stars:>=1000 pushed:>=${date(7)} ${partition}`, sort: "updated" },
+    { key: `archive-${year}`, query: `${common} stars:>=100 created:${year}-01-01..${year}-12-31`, sort: "stars" },
   ];
-  const perPage = Math.min(100, Math.max(1, Math.ceil(limit / queries.length)));
   const repositories = new Map<string, GitHubRepositoryInput>();
-  const buckets: GitHubRepositoryInput[][] = [];
-  const scopes: Array<{ query: string; requestedPage: number; actualPage: number; received: number; total: number | null; incomplete: boolean }> = [];
+  const scopes: Array<Record<string, unknown>> = [];
+  const cursorUpdates: Array<{ key: string; page: number }> = [];
   let incomplete = false;
-  for (const [index, query] of queries.entries()) {
-    const selectedPage = index === 0 ? 1 + (day % 10) : index === 1 ? 1 + (Math.floor(day / 10) % 10) : page;
-    const params = new URLSearchParams({ q: query, sort: "stars", order: "desc", per_page: String(perPage), page: String(selectedPage) });
-    let raw = record(await githubJson(`/search/repositories?${params}`));
-    if (!Array.isArray(raw.items)) throw new Error("GitHub 搜索结果缺少项目列表。");
-    if (raw.items.length === 0 && selectedPage !== 1) {
-      params.set("page", "1");
-      raw = record(await githubJson(`/search/repositories?${params}`));
+  const offset = day % channels.length;
+  const ordered = [...channels.slice(offset), ...channels.slice(0, offset)];
+  for (const [index, channel] of ordered.entries()) {
+    const quota = Math.floor(limit / channels.length) + (index < limit % channels.length ? 1 : 0);
+    if (!quota) continue;
+    const perPage = Math.min(100, quota);
+    const cursorKey = `${channel.key}:size-${perPage}`;
+    let page = Math.max(1, Math.min(Math.floor(1000 / perPage), cursor ? await cursor.getDiscoveryCursor(cursorKey) : 1));
+    // Up to three pages per channel replenish duplicate candidates without an unbounded search.
+    let accepted = 0;
+    for (let attempt = 0; attempt < 3 && accepted < quota; attempt += 1) {
+      const params = new URLSearchParams({ q: channel.query, sort: channel.sort, order: "desc", per_page: String(perPage), page: String(page) });
+      const raw = record(await githubJson(`/search/repositories?${params}`));
+      if (!Array.isArray(raw.items)) throw new Error("GitHub 搜索结果缺少项目列表。");
+      const total = typeof raw.total_count === "number" ? raw.total_count : null;
+      const bounded = raw.incomplete_results === true || (total !== null && total > raw.items.length);
+      incomplete ||= bounded;
+      scopes.push({ channel: channel.key, query: channel.query, sort: channel.sort, actualPage: page, perPage, received: raw.items.length, total, incomplete: bounded });
+      for (const item of raw.items) {
+        const repository = parseRepository(item);
+        if (repository && !repositories.has(repository.id) && accepted < quota) { repositories.set(repository.id, repository); accepted += 1; }
+      }
+      const lastPage = total === null ? Math.floor(1000 / perPage) : Math.max(1, Math.min(Math.floor(1000 / perPage), Math.ceil(total / perPage)));
+      page = raw.items.length < perPage || page >= lastPage ? 1 : page + 1;
+      cursorUpdates.push({ key: cursorKey, page });
+      if (!raw.items.length) break;
     }
-    if (!Array.isArray(raw.items)) throw new Error("GitHub 搜索结果缺少项目列表。");
-    const bounded = raw.incomplete_results === true || (typeof raw.total_count === "number" && raw.total_count > raw.items.length);
-    incomplete ||= bounded;
-    scopes.push({ query, requestedPage: selectedPage, actualPage: Number(params.get("page")), received: raw.items.length, total: typeof raw.total_count === "number" ? raw.total_count : null, incomplete: bounded });
-    const bucket: GitHubRepositoryInput[] = [];
-    for (const item of raw.items) {
-      const repository = parseRepository(item);
-      if (repository) bucket.push(repository);
-    }
-    buckets.push(bucket);
   }
-  for (let index = 0; index < perPage && repositories.size < limit; index += 1) {
-    for (const bucket of buckets) {
-      const repository = bucket[index];
-      if (repository && repositories.size < limit) repositories.set(repository.id, repository);
-    }
-  }
-  return { repositories: [...repositories.values()], scope: JSON.stringify({ queries: scopes, perPage }), incomplete };
+  return { repositories: [...repositories.values()], cursorUpdates, scope: JSON.stringify({ queries: scopes, policy: "bounded-multi-channel; stars and activity are discovery signals, not verified quality or growth" }), incomplete };
 };
 
 export const getRepository = async (fullName: string, repositoryId?: string): Promise<GitHubRepositoryInput | null> => {
@@ -191,18 +209,21 @@ export const getCommit = async (fullName: string, ref: string): Promise<string> 
 
 export interface TreeEntry { path: string; type: string; size: number | null }
 
-export const getTree = async (fullName: string, sha: string): Promise<TreeEntry[]> => {
-  const raw = record(await githubJson(`${repositoryPath(fullName)}/git/trees/${encodeURIComponent(sha)}`));
+export const getTree = async (fullName: string, sha: string, recursive = false): Promise<TreeEntry[]> => {
+  const raw = record(await githubJson(`${repositoryPath(fullName)}/git/trees/${encodeURIComponent(sha)}${recursive ? "?recursive=1" : ""}`));
   if (!Array.isArray(raw.tree)) throw new Error("GitHub 目录数据无效。");
-  return raw.tree.slice(0, 200).map(record).filter((entry) => typeof entry.path === "string" && typeof entry.type === "string")
+  return raw.tree.slice(0, recursive ? 2000 : 500).map(record).filter((entry) => typeof entry.path === "string" && typeof entry.type === "string")
     .map((entry) => ({ path: entry.path as string, type: entry.type as string, size: typeof entry.size === "number" ? entry.size : null }));
 };
 
 export const getFile = async (fullName: string, path: string, sha: string): Promise<string> => {
   if (path.includes("..") || path.startsWith("/") || path.length > 500) throw new Error("源码路径无效。");
   const raw = record(await githubJson(`${repositoryPath(fullName)}/contents/${path.split("/").map(encodeURIComponent).join("/")}?ref=${encodeURIComponent(sha)}`));
-  if (raw.type !== "file" || raw.encoding !== "base64" || typeof raw.content !== "string" || typeof raw.size !== "number" || raw.size > 100_000) throw new Error("资料不是可读取的小型文本文件。");
-  const text = Buffer.from(raw.content, "base64").toString("utf8");
-  if (text.includes("\u0000")) throw new Error("资料包含二进制内容。");
-  return text;
+  if (raw.type !== "file" || typeof raw.size !== "number" || raw.size > 2_000_000) throw new Error("资料不是可读取的文本文件，或超过 2 MB 下载上限。");
+  const body = raw.encoding === "base64" ? raw : typeof raw.sha === "string" && /^[a-f0-9]{40}$/.test(raw.sha)
+    ? record(await githubJson(`${repositoryPath(fullName)}/git/blobs/${raw.sha}`)) : raw;
+  if (body.encoding !== "base64" || typeof body.content !== "string") throw new Error("资料没有可核验的文本内容。");
+  const bytes = Buffer.from(body.content, "base64");
+  if (bytes.length > 2_000_000 || bytes.includes(0)) throw new Error("资料包含二进制内容或超过 2 MB 下载上限。");
+  try { return new TextDecoder("utf-8", { fatal: true }).decode(bytes); } catch { throw new Error("资料不是有效 UTF-8 文本。"); }
 };

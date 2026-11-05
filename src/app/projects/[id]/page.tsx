@@ -19,7 +19,7 @@ const ProjectPage = async ({ params }: Props): Promise<ReactElement> => {
   if (!/^\d+$/.test(id)) notFound();
   const project = await getProject(id);
   if (!project) notFound();
-  return <Detail item={project.item} updates={project.updates} />;
+  return <Detail item={project.item} updates={project.updates} related={project.related} />;
 };
 
 export default ProjectPage;

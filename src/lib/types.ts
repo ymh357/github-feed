@@ -1,5 +1,6 @@
-export type EventKind = "discovery" | "release";
+export type EventKind = "discovery" | "release" | "announcement";
 export type ContentStatus = "pending" | "processing" | "ready" | "failed" | "insufficient_sources";
+export type ContentDepth = "quick" | "deep";
 export type SortKey = "recent" | "stars" | "created" | "pushed" | "growth";
 
 export interface Repository {
@@ -20,6 +21,8 @@ export interface Repository {
   lastReleaseId: string | null;
   starGrowth: number | null;
   growthDays: number | null;
+  growth1d?: number | null;
+  growth7d?: number | null;
 }
 
 export interface FeedEvent {
@@ -33,6 +36,8 @@ export interface FeedEvent {
   releaseTag: string | null;
   releaseUrl: string | null;
   releaseBody: string | null;
+  importance?: "major" | "minor";
+  groupedReleaseCount?: number;
 }
 
 export interface ContentSection {
@@ -47,6 +52,7 @@ export interface ContentSource {
   fetchedAt: string;
   revision: string | null;
   text?: string;
+  readingRange?: string;
 }
 
 export interface LearningArticle {
@@ -62,6 +68,15 @@ export interface LearningArticle {
   sourcePaths: string[];
 }
 
+export interface ContentVersion {
+  id: string;
+  article: LearningArticle;
+  sources: ContentSource[];
+  model: string | null;
+  generatedAt: string;
+  depth: ContentDepth;
+}
+
 export interface LearningContent {
   id: string;
   eventId: string;
@@ -74,6 +89,13 @@ export interface LearningContent {
   promptVersion: string;
   inputTokens: number | null;
   outputTokens: number | null;
+  depth?: ContentDepth;
+  requestedDepth?: ContentDepth;
+  errorSummary?: string | null;
+  errorKind?: string | null;
+  attempts?: number;
+  nextRetryAt?: string | null;
+  versions?: ContentVersion[];
 }
 
 export interface CatalogItem {
@@ -93,6 +115,26 @@ export interface CatalogQuery {
   ids?: string[];
   readEventIds?: string[];
   readState?: "all" | "read" | "unread";
+  contentState?: "ready" | "pending" | "failed";
+  growthWindow?: "1d" | "7d";
+  groupMinorReleases?: boolean;
+}
+
+export interface CollectionHealth {
+  lastRunStatus: string | null;
+  lastRunAt: string | null;
+  discovered: number;
+  generated: number;
+  failed: number;
+  pending: number;
+  processing: number;
+  retryable: number;
+  exhausted: number;
+  staleRepositories: number;
+  ready: number;
+  failedContents: number;
+  lastSuccessfulAt: string | null;
+  stale?: boolean;
 }
 
 export interface CatalogResult {
@@ -104,12 +146,15 @@ export interface CatalogResult {
   lastUpdatedAt: string | null;
   configured: boolean;
   error: boolean;
+  health?: CollectionHealth;
+  coverage?: { scope: string | null; updatedAt: string | null };
 }
 
 export interface ProjectResult {
   repository: Repository;
   item: CatalogItem;
   updates: CatalogItem[];
+  related?: CatalogItem[];
 }
 
 export interface UpdateResult {
@@ -142,6 +187,7 @@ export interface ReleaseInput {
 }
 
 export interface ContentWrite {
+  depth?: ContentDepth;
   eventId: string;
   article: LearningArticle;
   sources: ContentSource[];
@@ -166,6 +212,7 @@ export interface RunFinish {
 
 export interface StoreContract {
   startRun(input: CollectionRunInput): Promise<string>;
+  setRunScope(id: string, scope: string): Promise<void>;
   finishRun(id: string, result: RunFinish): Promise<void>;
   upsertRepository(input: GitHubRepositoryInput): Promise<{ repository: Repository; isNew: boolean }>;
   recordSnapshot(repositoryId: string, stars: number): Promise<void>;
@@ -173,8 +220,14 @@ export interface StoreContract {
   getRepositoriesToSync(limit: number): Promise<Repository[]>;
   recordSyncAttempt(repositoryId: string): Promise<void>;
   retireRepository(repositoryId: string): Promise<void>;
-  getPendingEvents(limit: number): Promise<CatalogItem[]>;
+  getPendingEvents(limit: number, options?: { depth?: ContentDepth; repository?: string }): Promise<CatalogItem[]>;
   claimEvent(eventId: string): Promise<boolean>;
   saveContent(input: ContentWrite): Promise<void>;
+  recordAnnouncement(repositoryId: string, announcement: { sha: string; title: string; body: string; path: string; url: string; publishedAt: string }): Promise<void>;
+  getDeepCandidates(limit: number): Promise<Repository[]>;
+  getDiscoveryCursor(key: string): Promise<number>;
+  advanceDiscoveryCursor(key: string, page: number): Promise<void>;
+  queueRefresh(limit: number): Promise<number>;
+  resetContent(repositoryName: string, options?: { depth?: ContentDepth; retryOnly?: boolean }): Promise<number>;
   failContent(eventId: string, status: "failed" | "insufficient_sources", reason: string): Promise<void>;
 }

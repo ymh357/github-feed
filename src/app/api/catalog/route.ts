@@ -35,6 +35,9 @@ export const POST = async (request: Request): Promise<Response> => {
     }
     const query: CatalogQuery = {
       q: typeof input.q === "string" ? input.q.slice(0, 200) : undefined,
+      contentState: input.contentState === "ready" || input.contentState === "pending" || input.contentState === "failed" ? input.contentState : undefined,
+      growthWindow: input.growthWindow === "1d" ? "1d" : "7d",
+      groupMinorReleases: input.groupMinorReleases !== false,
       sort: sorts.has(input.sort as SortKey) ? input.sort as SortKey : "recent",
       view: input.view === "projects" ? "projects" : "feed",
       language: typeof input.language === "string" ? input.language.slice(0, 80) : undefined,

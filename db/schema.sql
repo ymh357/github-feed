@@ -89,3 +89,40 @@ CREATE TABLE IF NOT EXISTS collection_runs (
   started_at timestamptz NOT NULL DEFAULT now(),
   finished_at timestamptz
 );
+
+ALTER TABLE learning_contents ADD COLUMN IF NOT EXISTS depth text NOT NULL DEFAULT 'quick';
+ALTER TABLE learning_contents ADD COLUMN IF NOT EXISTS requested_depth text NOT NULL DEFAULT 'quick';
+ALTER TABLE learning_contents ADD COLUMN IF NOT EXISTS error_kind text;
+ALTER TABLE learning_contents ADD COLUMN IF NOT EXISTS next_retry_at timestamptz;
+ALTER TABLE learning_contents ADD COLUMN IF NOT EXISTS refresh_requested_at timestamptz;
+ALTER TABLE feed_events ADD COLUMN IF NOT EXISTS importance text NOT NULL DEFAULT 'minor';
+CREATE TABLE IF NOT EXISTS content_versions (
+  id text PRIMARY KEY,
+  content_id text NOT NULL REFERENCES learning_contents(id) ON DELETE CASCADE,
+  article jsonb NOT NULL,
+  sources jsonb NOT NULL DEFAULT '[]',
+  model text,
+  generated_at timestamptz NOT NULL,
+  depth text NOT NULL DEFAULT 'quick',
+  input_hash text
+);
+ALTER TABLE content_versions DROP CONSTRAINT IF EXISTS content_versions_content_id_input_hash_key;
+CREATE INDEX IF NOT EXISTS content_versions_latest_idx ON content_versions(content_id, generated_at DESC);
+CREATE TABLE IF NOT EXISTS discovery_cursors (
+  key text PRIMARY KEY,
+  page integer NOT NULL DEFAULT 1 CHECK (page > 0),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+ALTER TABLE content_sources ADD COLUMN IF NOT EXISTS reading_range text;
+INSERT INTO content_versions (id,content_id,article,sources,model,generated_at,depth,input_hash)
+SELECT 'version_' || md5(c.id || COALESCE(c.input_hash,'') || c.depth || COALESCE(c.model,'') || c.article::text),c.id,c.article,
+  COALESCE((SELECT jsonb_agg(jsonb_build_object('url',s.url,'title',s.title,'kind',s.kind,'fetchedAt',s.fetched_at,'revision',s.revision,'readingRange',s.reading_range) ORDER BY s.id) FROM content_sources s WHERE s.content_id=c.id),'[]'::jsonb),
+  c.model,c.generated_at,c.depth,c.input_hash
+FROM learning_contents c WHERE c.article IS NOT NULL AND c.generated_at IS NOT NULL
+AND NOT EXISTS (SELECT 1 FROM content_versions v WHERE v.content_id=c.id AND v.article=c.article
+  AND v.input_hash IS NOT DISTINCT FROM c.input_hash AND v.depth=c.depth AND v.model IS NOT DISTINCT FROM c.model)
+ON CONFLICT DO NOTHING;
+
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS last_announcement_sha text;
+ALTER TABLE feed_events DROP CONSTRAINT IF EXISTS feed_events_kind_check;
+ALTER TABLE feed_events ADD CONSTRAINT feed_events_kind_check CHECK (kind IN ('discovery','release','announcement'));

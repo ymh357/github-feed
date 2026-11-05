@@ -16,6 +16,9 @@ const HomePage = async ({ searchParams }: { searchParams: Promise<SearchParams> 
   const view = scalar(params.view);
   const query: CatalogQuery = {
     q: scalar(params.q).slice(0, 200),
+    contentState: scalar(params.contentState) === "ready" ? "ready" : scalar(params.contentState) === "pending" ? "pending" : scalar(params.contentState) === "failed" ? "failed" : undefined,
+    growthWindow: scalar(params.growthWindow) === "1d" ? "1d" : "7d",
+    groupMinorReleases: scalar(params.groupMinorReleases) !== "false",
     sort: sorts.includes(requestedSort as SortKey) ? requestedSort as SortKey : view === "projects" ? "stars" : "recent",
     view: view === "projects" || view === "favorites" ? "projects" : "feed",
     language: scalar(params.language).slice(0, 80),

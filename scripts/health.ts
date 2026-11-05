@@ -10,10 +10,15 @@ const health = async (): Promise<void> => {
     (SELECT count(*) FROM repositories) AS repositories,
     (SELECT count(*) FROM feed_events) AS events,
     (SELECT count(*) FROM learning_contents WHERE status = 'ready') AS ready,
-    (SELECT count(*) FROM learning_contents WHERE status = 'failed') AS failed,
+    (SELECT count(*) FROM learning_contents WHERE status IN ('failed', 'insufficient_sources')) AS failed,
+    (SELECT count(*) FROM learning_contents WHERE status = 'pending') AS pending,
+    (SELECT count(*) FROM learning_contents WHERE status = 'processing') AS processing,
+    (SELECT count(*) FROM content_versions WHERE depth = 'deep') AS deep_versions,
+    (SELECT count(*) FROM repositories WHERE is_active = true AND synced_at < now() - interval '24 hours') AS stale_repositories,
     (SELECT count(*) FROM learning_contents WHERE status = 'processing' AND lease_until < now()) AS expired_leases,
     (SELECT count(*) FROM learning_contents WHERE status <> 'ready' AND attempts >= 3) AS exhausted,
-    (SELECT max(finished_at) FROM collection_runs WHERE status IN ('completed', 'partial')) AS last_success`);
+    (SELECT max(finished_at) FROM collection_runs WHERE status IN ('completed', 'partial')) AS last_success,
+    (SELECT status FROM collection_runs ORDER BY started_at DESC LIMIT 1) AS last_run_status`);
   console.log(JSON.stringify({ database: "connected", ...rows[0] }, null, 2));
 };
 
