@@ -4,11 +4,11 @@
 
 ## 当前状态
 
-网站已在个人 Vercel 空间部署并公开可访问，0G Key 已本地配置并完成真实推理验证。尚未创建 Git 仓库、提交或推送；每日 GitHub Actions 更新仍待仓库授权和 Secrets 配置。数据库目前仍为待认领的临时数据库。
+网站已在个人 Vercel 空间部署并公开可访问，0G Key 已本地配置并完成真实推理验证。已创建并推送公开仓库 ymh357/github-feed，Actions Secrets 已配置。数据库已认领。首次云端更新因 GitHub 账号账单锁定而未能启动，自动更新尚未验证成功。
 
 正式地址：https://github-feed-nine.vercel.app
 
-生产部署：dpl_8L9A6KoVvXPWqYTCtQmxQKf8Goi8，状态 READY；个人空间 Miles' projects，项目 github-feed，Next.js preset，Node.js 22.x。通过本地源码部署，没有 Git 写操作。
+生产部署：dpl_8L9A6KoVvXPWqYTCtQmxQKf8Goi8，状态 READY；个人空间 Miles' projects，项目 github-feed，Next.js preset，Node.js 22.x。首次通过本地源码部署；随后按授权创建并推送公开仓库。
 
 本地预览：http://127.0.0.1:3000
 
@@ -27,7 +27,7 @@
 
 ## 临时数据库实际检查
 
-使用 Neon 官方匿名临时数据库，没有新增依赖或提供支付方式。到期时间为 **2026-11-08 18:20:47 北京时间**；认领操作链接保存在被忽略的 `artifacts/database-claim.md`，不应公开。
+初始使用 Neon 官方匿名临时数据库，没有新增依赖或提供支付方式。现已通过登录控制台认领，API 状态为 CLAIMED，项目在账号下可见并具有 ADMIN 权限，套餐 free_v3，控制台 Expires 为 Never。原临时到期时间不再作为有效边界。原认领操作链接保存在被忽略的 artifacts 中，不应公开。
 
 - 连续执行迁移两次，均成功：15 条幂等初始化语句。
 - 首轮 `collect --discovery-only --limit 6`：新增 6 仓库、6 发现事件，无失败。
@@ -88,9 +88,8 @@
 
 ## 尚未验证
 
-- 数据库永久归属；需要用户在到期前认领或替换自己的 Neon 数据库连接。
-- GitHub 私有仓库创建、提交推送、Actions Secrets 配置与真实 schedule 触发。
+- GitHub 云端成功执行与真实 schedule 触发：首次运行 42018379040 的注释明确为账号因 billing issue 被锁定，runner_id=0、steps=[]，没有执行代码。需要账号本人解除限制后重跑。
 - 正式版本新事件的跨日线上跟踪、成熟 Star 增长区间；目前仍只有当日快照。
 - 当前没有新增自动化测试，遵循用户约束。
 
-当前网站已上线；每日持续更新尚未启用，临时数据库的可用性有到期边界。
+当前网站已上线，数据库已认领且原连接仍通过 health；每日更新的工作流和 Secrets 已就绪，但 GitHub 账单锁定阻止其执行，不能宣称自动更新已经生效。

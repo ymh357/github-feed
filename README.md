@@ -9,7 +9,7 @@
 - GitHub Actions：每日分批发现与同步，直接写数据库，不提交内容到仓库。
 - 0G Router：服务端生成并保存解读；访问页面不调用付费模型。
 
-基础设施使用免费套餐起步，具体消耗取决于规模与账号额度。AI 推理单独计费。源码仓库可以私有，网站仍可公开访问。
+基础设施使用免费套餐起步，具体消耗取决于规模与账号额度。AI 推理单独计费。本项目使用公开源码仓库，标准 GitHub-hosted runner 免费；账号自身的账单锁定仍可能阻止 Actions 启动。
 
 ## 本地配置
 
@@ -64,13 +64,13 @@ npm run build
 ## 部署
 
 1. 建立 Neon 免费项目，把连接写入本地 `DATABASE_URL`，执行迁移。
-2. 将项目提交到自己的 GitHub 仓库。私有仓库的 Actions 运行消耗账号包含额度，超额不会被当作无限免费。
+2. 将项目提交到自己的公开 GitHub 仓库，使用标准 ubuntu-latest runner。
 3. 在仓库 Settings → Secrets and variables → Actions 添加 `DATABASE_URL`、`ZERO_G_API_KEY`、`ZERO_G_MODEL`。工作流使用 GitHub 内置只读 `GITHUB_TOKEN`。
 4. 在 Vercel 个人空间导入仓库，框架选择 Next.js。网站环境变量仅需要 `DATABASE_URL`，可加 `NEXT_PUBLIC_SITE_URL`；AI Key 留在 Actions Secrets 中即可。
 5. 配置 Vercel Production 为公开访问。不要把默认预览部署的访问保护状态当作正式站点的公开状态。
 6. 手动运行 Collect 工作流，检查完成状态、任务统计和网站真实数据。之后观察至少一次真实 schedule 触发。
 
-定时任务定义在 `.github/workflows/collect.yml`，以 UTC 编排。GitHub 的定时任务可能延迟，不承诺准点；公开仓库长期无活动也可能停用定时任务，需检查 Actions。页面展示最近有效更新时间以便识别停更。
+定时任务定义在 `.github/workflows/collect.yml`，计划每日北京时间 06:23（UTC 22:23）运行。GitHub 的定时任务可能延迟，不承诺准点；公开仓库长期无活动也可能停用定时任务，需检查 Actions。页面展示最近有效更新时间以便识别停更。
 
 网站请求不执行迁移或触发模型生成。部署网页不等于后台已配置、生成成功或定时触发成功。
 
@@ -85,3 +85,11 @@ npm run build
 - 收藏以仓库 ID 保存，已读以事件 ID 保存。换浏览器或清除浏览器数据前，可在收藏页导出记录，再导入恢复。
 
 设计与实施记录位于 `docs/superpowers/`。
+
+## 当前上线状态（2026-11-05）
+
+- 网站：https://github-feed-nine.vercel.app
+- 公开源码：https://github.com/ymh357/github-feed
+- Neon 数据库已认领至当前账号，免费套餐，控制台到期显示 Never。
+- Actions 的三个 Secrets 已配置。首次云端运行在分配 runner 前失败：GitHub 账号因账单问题被锁定，需要账号本人解除限制后重跑；尚未验证每日自动更新成功。
+- 失败记录：https://github.com/ymh357/github-feed/actions/runs/42018379040
