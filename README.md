@@ -91,5 +91,5 @@ npm run build
 - 网站：https://github-feed-nine.vercel.app
 - 公开源码：https://github.com/ymh357/github-feed
 - Neon 数据库已认领至当前账号，免费套餐，控制台到期显示 Never。
-- Actions 的三个 Secrets 已配置。首次云端运行在分配 runner 前失败：GitHub 账号因账单问题被锁定，需要账号本人解除限制后重跑；尚未验证每日自动更新成功。
-- 失败记录：https://github.com/ymh357/github-feed/actions/runs/42018379040
+- Actions 的三个 Secrets 已配置。账号降级到 Free 后，第二次云端执行已完成：新增 7 项目、生成 5 篇解读，2 项资料读取失败，结果为 partial；网站已读取新增数据。每日计划为北京时间 06:23，首次真实 schedule 触发尚待观察。
+- 云端运行记录：https://github.com/ymh357/github-feed/actions/runs/42018379040/attempts/2

@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-网站已在个人 Vercel 空间部署并公开可访问，0G Key 已本地配置并完成真实推理验证。已创建并推送公开仓库 ymh357/github-feed，Actions Secrets 已配置。数据库已认领。首次云端更新因 GitHub 账号账单锁定而未能启动，自动更新尚未验证成功。
+网站已在个人 Vercel 空间部署并公开可访问，0G Key 已本地配置并完成真实推理验证。已创建并推送公开仓库 ymh357/github-feed，Actions Secrets 已配置。数据库已认领。首次云端更新因 GitHub 账号账单锁定而未能启动；降级 Free 后第二次执行完成真实采集与生成，结果 partial，详见下文。
 
 正式地址：https://github-feed-nine.vercel.app
 
@@ -88,8 +88,18 @@
 
 ## 尚未验证
 
-- GitHub 云端成功执行与真实 schedule 触发：首次运行 42018379040 的注释明确为账号因 billing issue 被锁定，runner_id=0、steps=[]，没有执行代码。需要账号本人解除限制后重跑。
+- 首次真实 schedule 触发尚待观察；本轮验证为 workflow_dispatch 的第二次执行。
 - 正式版本新事件的跨日线上跟踪、成熟 Star 增长区间；目前仍只有当日快照。
 - 当前没有新增自动化测试，遵循用户约束。
 
-当前网站已上线，数据库已认领且原连接仍通过 health；每日更新的工作流和 Secrets 已就绪，但 GitHub 账单锁定阻止其执行，不能宣称自动更新已经生效。
+当前网站已上线，数据库已认领，账号账单锁定已解除，云端采集、模型生成、入库及网站读取已实际打通。任务对单项资料失败返回非零退出码并如实记为 partial，没有把本轮当作全部成功。
+
+## 降级后的云端实际运行
+
+- 运行 42018379040 / attempt 2，collect job 127221232459，2026-11-05 北京时间 19:36 至 19:45。
+- runner 正常启动；checkout、Node 22、npm ci、数据库迁移均通过。
+- 数据库 run 975f0231-b794-43c8-a414-198216676041：discovered=7、generated=5、failed=2、status=partial。
+- NandhaKishorM/laya 与 trimstray/the-book-of-secret-knowledge 的错误均为“资料不是可读取的小型文本文件。”；未放宽资料校验或编造解读。
+- health：13 repositories、13 events、11 ready、2 failed、0 expired leases、0 exhausted。
+- 生产 catalog API 返回 HTTP 200、error=false，包含本轮新增内容及最新采集时间。
+- 工作流因两项失败返回 exit 1；这次失败与账号锁定无关。
