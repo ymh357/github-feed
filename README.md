@@ -92,12 +92,12 @@ npm run build
 - 公开源码：https://github.com/ymh357/github-feed
 - Neon 数据库已认领至当前账号，免费套餐，控制台到期显示 Never。
 - Actions 的三个 Secrets 已配置，账号已降级 Free 并解除执行限制。17 项升级与验证记录见 docs/verification-upgrade-2026-11-05.md；真实 schedule 触发仍需后续观察。
-- 云端运行记录：https://github.com/ymh357/github-feed/actions/runs/42018379040/attempts/2
+- 新版云端同步与生成均成功：[同步](https://github.com/ymh357/github-feed/actions/runs/42026391818)、[生成](https://github.com/ymh357/github-feed/actions/runs/42026507470)。
 
 ## 持续学习与内容维护
 
 - 快速理解与深入学习：后台有界补齐深入解读；页面按深度/历史版本切换正文、来源与读取范围，浏览不触发付费推理。
-- 内容刷新保留旧文和历史。推送变化满7天或普通满30天的介绍会有界进入刷新队列。
+- 内容刷新保留旧文和历史。解读超过7天且有新推送、或超过30天的介绍会有界进入刷新队列。
 - 正式版本保留独立详情；小版本可按项目和UTC自然周合并，也可逐条展开。重大版本按版本号/说明关键词识别，并非人工重要性背书。
 - 没有Release时，跟踪仓库内CHANGELOG/NEWS变化并展示为官方文档变化，不能覆盖任意站外公告。
 - 搜索覆盖正文、知识要点与版本说明；关联项目基于主题/语言，不代表质量排名。

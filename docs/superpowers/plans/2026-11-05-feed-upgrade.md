@@ -27,8 +27,8 @@
 - [x] 采集批次 B：scripts/collect.ts、.github/workflows/collect.yml。阶段独立调度、有限并发、重试份额、刷新队列、稳定运行统计；限流与基础故障仍失败，单项错误 partial 可观测。
 - [x] 前端批次 A：personal-state.tsx、新 learning-tools.tsx、detail.tsx。手动已读/撤销、笔记与进度、深度与历史版本、关联项目、准确失败原因。
 - [x] 前端批次 B：feed.tsx、globals.css。状态筛选、健康与积压、增长窗口、唯一收藏项目、合并小版本。feed.tsx 结构调整前先检查并清理死代码，单独提交。
-- [ ] 集成：类型与 lint、构建，迁移两次；真实长 README 与失败恢复；云端工作流、公开网站与本地记录兼容检查。
-- [ ] 独立审查与修复，更新文档并按既有授权推送和部署。
+- [x] 集成：类型与 lint、构建，迁移两次；真实长 README 与失败恢复；云端工作流、公开网站与本地记录兼容检查。
+- [x] 独立审查与修复，更新文档并按既有授权推送和部署。
 
 ## 共享接口约定
 - collectSources(item, depth?: 'quick'|'deep') 与 generateLearning(item,sources,model,depth?: 'quick'|'deep') 保持现有三参数兼容。
@@ -38,3 +38,7 @@
 - ProjectResult 增可选 related: CatalogItem[]；FeedEvent 增可选 importance ('major'|'minor')。
 - StoreContract 新增 getDiscoveryCursor(key): Promise<number>, advanceDiscoveryCursor(key,page):Promise<void>, queueRefresh(limit):Promise<number>；额外 pending/sync options 用可选第二参数保持兼容。
 - 数据层新增字段默认值兼容旧数据。前端先读可选字段，不依赖数据库迁移先后。
+
+## 收尾证据
+
+完整执行与边界见 docs/verification-upgrade-2026-11-05.md。feed.tsx检查无死代码、unused props/imports或debug日志，因此未制造空清理提交。所有功能已提交；云端同步与生成手动执行均成功，首次自然定时触发仍待观察。文件导入浏览器自动化受扩展权限限制，兼容解析已验证。

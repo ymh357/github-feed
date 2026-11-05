@@ -10,8 +10,8 @@ const ORDERS: Record<SortKey, string> = {
 const integer = (value: number | undefined, min: number, max: number, fallback: number): number =>
   value !== undefined && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback;
 
-const health = async (): Promise<{ health: CollectionHealth; scope: string | null }> => {
-  const [runs, counts] = await Promise.all([
+const health = async (): Promise<{ health: CollectionHealth; coverage: NonNullable<CatalogResult["coverage"]> }> => {
+  const [runs, counts, discoveryRuns] = await Promise.all([
     queryRows("SELECT * FROM collection_runs ORDER BY started_at DESC LIMIT 1"),
     queryRows(`SELECT count(*) FILTER (WHERE c.article IS NOT NULL) AS ready,
       count(*) FILTER (WHERE c.status='pending') AS pending,
@@ -23,8 +23,20 @@ const health = async (): Promise<{ health: CollectionHealth; scope: string | nul
       (SELECT max(finished_at) FROM collection_runs WHERE status='completed') AS last_successful_at,
       (SELECT max(finished_at) FROM collection_runs WHERE status IN ('completed','partial')) AS last_updated_at
       FROM learning_contents c JOIN feed_events e ON e.id=c.event_id JOIN repositories r ON r.id=e.repository_id WHERE r.is_active`),
+    queryRows(`SELECT discovery_scope,started_at,finished_at FROM collection_runs
+      WHERE discovery_scope LIKE '%"queries"%' ORDER BY started_at DESC LIMIT 100`),
   ]);
   const row = runs[0]; const count = counts[0];
+  let coverage: NonNullable<CatalogResult["coverage"]> = { scope: null, updatedAt: null };
+  for (const run of discoveryRuns) {
+    try {
+      const parsed: unknown = JSON.parse(String(run.discovery_scope));
+      if (parsed && typeof parsed === "object" && "queries" in parsed && Array.isArray(parsed.queries) && parsed.queries.length > 0) {
+        coverage = { scope: String(run.discovery_scope), updatedAt: String(run.finished_at ?? run.started_at) };
+        break;
+      }
+    } catch { /* Historical truncated scopes must not hide newer valid coverage or break the catalog. */ }
+  }
   return { health: {
     lastRunStatus: row ? String(row.status) : null,
     lastRunAt: row ? String(row.finished_at ?? row.started_at) : null,
@@ -34,7 +46,7 @@ const health = async (): Promise<{ health: CollectionHealth; scope: string | nul
     ready: Number(count.ready), failedContents: Number(count.failed_contents),
     lastSuccessfulAt: count.last_successful_at ? String(count.last_successful_at) : null,
     stale: !count.last_updated_at || Date.now() - Date.parse(String(count.last_updated_at)) > 30 * 3600_000,
-  }, scope: row ? String(row.discovery_scope) : null };
+  }, coverage };
 };
 
 export const getCatalog = async (input: CatalogQuery = {}): Promise<CatalogResult> => {
@@ -81,7 +93,7 @@ export const getCatalog = async (input: CatalogQuery = {}): Promise<CatalogResul
     if (input.growthWindow === "1d") items.forEach((item,index) => { item.repository.starGrowth = item.repository.growth1d ?? null; item.repository.growthDays = rows[index].growth_1d_days === null ? null : Number(rows[index].growth_1d_days); });
     return { ...empty, items, total, page, languages: languageRows.map((row) => String(row.language)),
       lastUpdatedAt: updatedRows[0]?.updated ? String(updatedRows[0].updated) : null,
-      health: state.health, coverage: { scope: state.scope, updatedAt: state.health.lastRunAt } };
+      health: state.health, coverage: state.coverage };
   } catch {
     console.error("Catalog query failed; verify database connectivity and schema.");
     return { ...empty, error: true };
