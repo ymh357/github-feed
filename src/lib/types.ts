@@ -23,6 +23,9 @@ export interface Repository {
   growthDays: number | null;
   growth1d?: number | null;
   growth7d?: number | null;
+  admissionStatus?: "candidate" | "eligible";
+  admissionReason?: string;
+  discoveryChannels?: string[];
 }
 
 export interface FeedEvent {
@@ -175,6 +178,8 @@ export interface GitHubRepositoryInput {
   createdAt: string;
   pushedAt: string;
   defaultBranch: string;
+  discoveryChannels?: string[];
+  admissionReason?: string;
 }
 
 export interface ReleaseInput {

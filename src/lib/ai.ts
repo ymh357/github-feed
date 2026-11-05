@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { FORMAL_STAR_FLOOR, isFormalRepository } from "./discovery-policy";
 import type { CatalogItem, ContentSource, ContentWrite, LearningArticle, ContentDepth } from "./types";
 
 export const PROMPT_VERSION = "github-learning-2";
@@ -158,6 +159,7 @@ const requestJson = async (model: string, capability: ModelInfo, system: string,
 };
 
 export const generateLearning = async (item: CatalogItem, sources: ContentSource[], model: string, depth: ContentDepth = "quick", shouldContinue: () => boolean = () => true, deadline: number = Date.now() + 600_000): Promise<ContentWrite> => {
+  if (!isFormalRepository(item.repository)) throw new Error(`仓库未达到正式收录门槛 ${FORMAL_STAR_FLOOR} Star，仅作为候选保留，未调用模型。`);
   if (!model || model.length > 200) throw new Error("缺少有效的 ZERO_G_MODEL。");
   const capability = await getModel(model);
   if (!sources.length || sources.reduce((total, source) => total + (source.text?.length ?? 0), 0) > 60_000) throw new Error("学习输入资料为空或超过大小限制。");

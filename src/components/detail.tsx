@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { discoveryChannelLabel } from "@/lib/discovery-labels";
 import { useState } from "react";
 import type { ReactElement, ReactNode } from "react";
 import type { CatalogItem } from "@/lib/types";
@@ -85,7 +86,7 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
         <div className="detail-heading">
           <div className="detail-heading-label">
             <span className={`event-badge ${isUpdate ? "release" : ""}`}>
-              {isUpdate ? announcement ? "官方文档变化" : "正式版本更新" : "项目学习"}
+              {repo.admissionStatus === "candidate" ? "候选项目 · 未正式收录" : isUpdate ? announcement ? "官方文档变化" : "正式版本更新" : "项目学习"}
             </span>
             {repo.language && <span className="language-stat">
               <i />
@@ -98,6 +99,7 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
           <p>
             {article?.summary || repo.description || "项目暂未提供介绍。"}
           </p>
+          {repo.admissionReason && <p className="pending-caption"><strong>{repo.admissionStatus === "candidate" ? "候选原因：" : "收录依据："}</strong>{repo.admissionReason}{repo.discoveryChannels?.length ? ` 发现记录：${repo.discoveryChannels.map(discoveryChannelLabel).join("、")}。` : ""}</p>}
           <div className="detail-stats">
             <span><strong>
               {repo.stars.toLocaleString()}

@@ -43,6 +43,9 @@ export const mapRepository = (row: DbRow): Repository => ({
   growthDays: row.growth_days === null || row.growth_days === undefined ? null : Number(row.growth_days),
   growth1d: row.growth_1d === null || row.growth_1d === undefined ? null : Number(row.growth_1d),
   growth7d: row.growth_7d === null || row.growth_7d === undefined ? null : Number(row.growth_7d),
+  admissionStatus: row.admission_status === "candidate" ? "candidate" : "eligible",
+  admissionReason: String(row.admission_reason ?? ""),
+  discoveryChannels: Array.isArray(row.discovery_channels) ? row.discovery_channels as string[] : [],
 });
 
 export const mapCatalogItem = (row: DbRow): CatalogItem => {

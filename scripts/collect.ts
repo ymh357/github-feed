@@ -3,6 +3,7 @@ import { assertModel, generateLearning, ZeroGInfrastructureError } from "../src/
 import { discoverRepositories, getReleases, getRepository, getCommit, getTree, getFile, githubJson, repositoryPath, GitHubError } from "../src/lib/github";
 import { collectSources, InsufficientSourcesError, selectSections } from "../src/lib/sources";
 import { store } from "../src/lib/store";
+import { FORMAL_STAR_FLOOR, isFormalRepository } from "../src/lib/discovery-policy";
 import type { ContentDepth, GitHubRepositoryInput, Repository, RunFinish } from "../src/lib/types";
 
 const options = process.argv.slice(2);
@@ -71,7 +72,9 @@ const main = async (): Promise<void> => {
   validateOptions();
   if (has("--dry-run")) {
     const discovery = await discoverRepositories(limit);
-    console.log(JSON.stringify({ mode: "dry-run", scope: JSON.parse(discovery.scope), count: discovery.repositories.length, repositories: discovery.repositories.map(({ id, fullName, stars }) => ({ id, fullName, stars })) }, null, 2)); return;
+    console.log(JSON.stringify({ mode: "dry-run", scope: JSON.parse(discovery.scope), formalStarFloor: FORMAL_STAR_FLOOR, count: discovery.repositories.length,
+      repositories: discovery.repositories.map(({ id, fullName, stars, discoveryChannels, admissionReason }) => ({ id, fullName, stars, discoveryChannels, admissionReason })),
+      candidates: (discovery.candidates ?? []).map(({ id, fullName, stars, discoveryChannels, admissionReason }) => ({ id, fullName, stars, discoveryChannels, admissionReason })) }, null, 2)); return;
   }
   if (!process.env.DATABASE_URL) throw new Error("缺少 DATABASE_URL，未写入数据。");
   const generate = !has("--discovery-only") && ["all", "generate"].includes(stage);
@@ -82,7 +85,9 @@ const main = async (): Promise<void> => {
   const runId = await store.startRun({ discoveryScope: JSON.stringify({ stage, depth: depth || "both", repository: repositoryName || null }) });
   let stopped = false;
   let infrastructureFailure = false;
+  let discoveryDegraded = false;
   const handled = new Set<string>();
+  const discoveryMetadataIds = new Set<string>();
   const recordFailure = (error: unknown, name: string): void => {
     result.failed += 1; console.error(`${name}：${safeError(error)}`);
     if (error instanceof ZeroGInfrastructureError || safeError(error) === "任务失败，请检查网络、服务端配置与数据库状态。") { stopped = true; infrastructureFailure = true; }
@@ -90,9 +95,11 @@ const main = async (): Promise<void> => {
   };
   const sync = async (input: GitHubRepositoryInput): Promise<void> => {
     const { repository, isNew } = await store.upsertRepository(input);
-    await store.recordSnapshot(repository.id, repository.stars);
-    if (isNew) result.discovered += 1;
     handled.add(repository.id);
+    if (!isFormalRepository(input)) { discoveryMetadataIds.add(input.id); return; }
+    await store.recordSnapshot(repository.id, repository.stars);
+    discoveryMetadataIds.add(input.id);
+    if (isNew) result.discovered += 1;
     await syncReleases(repository, isNew);
     await syncAnnouncement(repository);
   };
@@ -100,13 +107,15 @@ const main = async (): Promise<void> => {
     if (["all", "discover"].includes(stage) && !repositoryName) {
       const discovery = await discoverRepositories(limit, new Date(), store);
       await store.setRunScope(runId, JSON.stringify({ stage, ...JSON.parse(discovery.scope) }));
-      let persisted = true;
-      for (const input of discovery.repositories) {
-        if (Date.now() > deadline - 90_000 || stopped) { stopped = true; persisted = false; break; }
-        try { await sync(input); } catch (error) { persisted = false; recordFailure(error, input.fullName); }
+      discoveryDegraded = discovery.degraded === true;
+      const discoveryInputs = [...discovery.repositories, ...(discovery.candidates ?? [])];
+      for (const input of discoveryInputs) {
+        if (Date.now() > deadline - 90_000 || stopped) { stopped = true; break; }
+        try { await sync(input); } catch (error) { recordFailure(error, input.fullName); }
       }
-      if (persisted) for (const update of discovery.cursorUpdates ?? []) await store.advanceDiscoveryCursor(update.key, update.page);
-      result.message = `已扫描 ${JSON.parse(discovery.scope).queries.length} 个有界查询页；${discovery.repositories.length} 个去重候选，并非全 GitHub 扫描。`;
+      // Discovery cursors acknowledge metadata persistence, independently of downstream release/document processing.
+      if (discoveryInputs.every((input) => discoveryMetadataIds.has(input.id))) for (const update of discovery.cursorUpdates ?? []) await store.advanceDiscoveryCursor(update.key, update.page);
+      result.message = `已检查 ${JSON.parse(discovery.scope).queries.length} 个渠道记录；正式项目 ${discovery.repositories.length} 个，早期候选 ${(discovery.candidates ?? []).length} 个，不是全 GitHub 扫描。${discoveryDegraded ? " Trending 渠道出现读取或核验失败，已降级并记录原因。" : ""}`;
       console.log(JSON.stringify({ discoveryScope: JSON.parse(discovery.scope) }));
     }
     if (!stopped && ["all", "sync"].includes(stage)) {
@@ -133,6 +142,17 @@ const main = async (): Promise<void> => {
         while (next < events.length && !stopped) {
           if (Date.now() > deadline - 600_000) { stopped = true; break; }
           const item = events[next++];
+          // Recheck admission immediately before paid work, including legacy and manually queued items.
+          try {
+            const current = await getRepository(item.repository.fullName, item.repository.id);
+            if (!current) { await store.retireRepository(item.repository.id); continue; }
+            await store.upsertRepository(current);
+            if (!isFormalRepository(current)) continue;
+            item.repository = { ...item.repository, ...current };
+          } catch (error) {
+            if (error instanceof GitHubError && [404, 410].includes(error.status)) { await store.retireRepository(item.repository.id); continue; }
+            recordFailure(error, item.repository.fullName); continue;
+          }
           if (!await store.claimEvent(item.event.id)) continue;
           const selectedDepth = depth || item.content?.requestedDepth || "quick";
           let content;
@@ -161,7 +181,7 @@ const main = async (): Promise<void> => {
       };
       await Promise.all([worker(), worker()]);
     }
-    result.status = stopped || result.failed > 0 ? "partial" : "completed";
+    result.status = stopped || result.failed > 0 || discoveryDegraded ? "partial" : "completed";
     result.message = [result.message, stopped ? "达到有界运行预算或基础限流，队列保留供后续续跑。" : "本次阶段已结束。", result.failed ? `${result.failed} 项内容未完成，详情见失败状态。` : ""].filter(Boolean).join(" ");
     await store.finishRun(runId, result);
     console.log(JSON.stringify({ runId, ...result }));

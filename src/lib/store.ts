@@ -32,14 +32,22 @@ export const store: StoreContract = {
 
   async upsertRepository(input) {
     const eventId = `discovery_${input.id}`;
+    const eligible = input.stars >= 1000;
+    const channels = [...new Set((input.discoveryChannels ?? []).filter((channel) => typeof channel === "string" && channel.length > 0 && channel.length <= 100))].slice(0, 20);
+    const reason = eligible
+      ? `符合1000Star门槛（当前${input.stars} Star）。${input.admissionReason?.slice(0, 300) ?? ""}`
+      : `低于1000Star门槛（当前${input.stars} Star），暂存候选，不进入正式学习库。`;
     const rows = await queryRows(`WITH saved AS (
       INSERT INTO repositories (id, full_name, description, url, homepage, language, topics, stars, forks,
-        created_at, pushed_at, default_branch, last_sync_attempt_at)
-      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,now())
+        created_at, pushed_at, default_branch, last_sync_attempt_at,admission_status,discovery_channels,admission_reason,is_active)
+      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,now(),$14,$15::jsonb,$16,$17)
       ON CONFLICT (id) DO UPDATE SET full_name = EXCLUDED.full_name, description = EXCLUDED.description,
         url = EXCLUDED.url, homepage = EXCLUDED.homepage, language = EXCLUDED.language, topics = EXCLUDED.topics,
         stars = EXCLUDED.stars, forks = EXCLUDED.forks, pushed_at = EXCLUDED.pushed_at,
-        default_branch = EXCLUDED.default_branch, synced_at = now(), last_sync_attempt_at = now(), is_active = true
+        default_branch = EXCLUDED.default_branch, synced_at = now(), last_sync_attempt_at = now(), is_active = EXCLUDED.is_active,
+        admission_status=EXCLUDED.admission_status,admission_reason=EXCLUDED.admission_reason,
+        discovery_channels=(SELECT COALESCE(jsonb_agg(DISTINCT channel),'[]'::jsonb)
+          FROM jsonb_array_elements(repositories.discovery_channels || EXCLUDED.discovery_channels) channel)
       RETURNING *, (xmax = 0) AS is_new
     ), event AS (
       INSERT INTO feed_events (id, repository_id, kind, title, published_at)
@@ -50,7 +58,7 @@ export const store: StoreContract = {
       SELECT 'content_' || id, id FROM event ON CONFLICT DO NOTHING RETURNING id
     ) SELECT * FROM saved`, [input.id, input.fullName, input.description, input.url, input.homepage,
       input.language, JSON.stringify(input.topics), input.stars, input.forks, input.createdAt,
-      input.pushedAt, input.defaultBranch, eventId]);
+      input.pushedAt, input.defaultBranch, eventId, eligible ? "eligible" : "candidate", JSON.stringify(channels), reason, eligible]);
     return { repository: mapRepository(rows[0]), isNew: Boolean(rows[0].is_new) };
   },
 
@@ -81,7 +89,7 @@ export const store: StoreContract = {
   },
 
   async getRepositoriesToSync(limit) {
-    const rows = await queryRows(`SELECT * FROM repositories WHERE is_active = true
+    const rows = await queryRows(`SELECT * FROM repositories WHERE is_active = true OR admission_status='candidate'
       ORDER BY COALESCE(last_sync_attempt_at,synced_at) + CASE WHEN pushed_at > now()-interval '14 days' THEN interval '0 hours' ELSE interval '12 hours' END ASC, id ASC LIMIT $1`, [boundedLimit(limit)]);
     return rows.map(mapRepository);
   },
@@ -99,7 +107,7 @@ export const store: StoreContract = {
       error_kind='transient',error_summary='上次处理意外中断，已达到重试上限。',updated_at=now()
       WHERE status='processing' AND lease_until<now() AND attempts>=3`);
     const rows = await queryRows(`SELECT ${ITEM_SELECT} FROM feed_events e ${ITEM_JOINS}
-      WHERE r.is_active AND c.attempts<3 AND c.error_kind IS DISTINCT FROM 'source'
+      WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000 AND c.attempts<3 AND c.error_kind IS DISTINCT FROM 'source'
       AND (c.next_retry_at IS NULL OR c.next_retry_at<=now())
       AND (c.status IN ('pending','failed','insufficient_sources') OR (c.status='processing' AND c.lease_until<now()))
       AND ($2::text IS NULL OR c.requested_depth=$2) AND ($3::text IS NULL OR lower(r.full_name)=lower($3))
@@ -116,7 +124,7 @@ export const store: StoreContract = {
         AND (next_retry_at IS NULL OR next_retry_at<=now()) AND (status IN ('pending', 'failed', 'insufficient_sources')
         OR (status = 'processing' AND lease_until < now()))
         AND EXISTS (SELECT 1 FROM feed_events e JOIN repositories r ON r.id = e.repository_id
-          WHERE e.id = $1 AND r.is_active = true) RETURNING id`, [eventId, token]);
+          WHERE e.id = $1 AND r.is_active = true AND r.admission_status='eligible' AND r.stars>=1000) RETURNING id`, [eventId, token]);
     if (rows.length === 1) ownedLeases.set(eventId, token);
     return rows.length === 1;
   },
@@ -171,7 +179,7 @@ export const store: StoreContract = {
     const rows = await queryRows(`UPDATE learning_contents c SET status='pending',attempts=0,requested_depth=c.depth,
       error_kind=NULL,error_summary=NULL,next_retry_at=NULL,refresh_requested_at=now(),updated_at=now()
       WHERE c.id IN (SELECT c2.id FROM learning_contents c2 JOIN feed_events e ON e.id=c2.event_id
-        JOIN repositories r ON r.id=e.repository_id WHERE r.is_active AND e.kind='discovery' AND c2.status='ready'
+        JOIN repositories r ON r.id=e.repository_id WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000 AND e.kind='discovery' AND c2.status='ready'
         AND (c2.generated_at<now()-interval '30 days' OR (r.pushed_at>c2.generated_at AND c2.generated_at<now()-interval '7 days'))
         ORDER BY c2.generated_at LIMIT $1) RETURNING id`, [boundedLimit(limit)]);
     return rows.length;
@@ -179,7 +187,7 @@ export const store: StoreContract = {
 
   async getDeepCandidates(limit) {
     const rows = await queryRows(`SELECT r.* FROM repositories r JOIN feed_events e ON e.repository_id=r.id AND e.kind='discovery'
-      JOIN learning_contents c ON c.event_id=e.id WHERE r.is_active AND c.status='ready' AND c.depth='quick'
+      JOIN learning_contents c ON c.event_id=e.id WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000 AND c.status='ready' AND c.depth='quick'
       AND NOT EXISTS(SELECT 1 FROM content_versions v WHERE v.content_id=c.id AND v.depth='deep')
       ORDER BY c.generated_at,r.id LIMIT $1`, [boundedLimit(limit)]);
     return rows.map(mapRepository);
@@ -189,7 +197,7 @@ export const store: StoreContract = {
     const rows = await queryRows(`UPDATE learning_contents c SET status='pending',attempts=0,
       requested_depth=COALESCE($2::text,c.depth),error_kind=NULL,error_summary=NULL,next_retry_at=NULL,
       refresh_requested_at=now(),updated_at=now() WHERE c.event_id IN (SELECT e.id FROM feed_events e
-        JOIN repositories r ON r.id=e.repository_id WHERE lower(r.full_name)=lower($1)
+        JOIN repositories r ON r.id=e.repository_id WHERE lower(r.full_name)=lower($1) AND r.is_active AND r.admission_status='eligible' AND r.stars>=1000
         AND ($3::boolean OR e.kind='discovery'))
       AND (c.status<>'processing' OR c.lease_until<now())
       AND (NOT $3::boolean OR c.status IN ('failed','insufficient_sources')) RETURNING id`,

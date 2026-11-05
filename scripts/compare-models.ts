@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 import { generateLearning, listModels } from "../src/lib/ai";
 import { getRepository } from "../src/lib/github";
 import { collectSources } from "../src/lib/sources";
+import { admissionReason, isFormalRepository } from "../src/lib/discovery-policy";
 import type { CatalogItem, Repository } from "../src/lib/types";
 
 const main = async (): Promise<void> => {
@@ -11,14 +12,21 @@ const main = async (): Promise<void> => {
     return;
   }
   if (process.argv.slice(2).some((argument) => argument.startsWith("--") && argument !== "--list-models")) throw new Error("请使用有效参数；加 --help 查看帮助。");
-  const models = [...new Set((process.env.ZERO_G_COMPARE_MODELS ?? "").split(",").map((model) => model.trim()).filter(Boolean))];
-  const available = await listModels();
-  if (process.argv.includes("--list-models")) { console.log(JSON.stringify(available, null, 2)); return; }
-  if (!process.env.ZERO_G_API_KEY) throw new Error("缺少 ZERO_G_API_KEY，未执行付费模型比较。");
-  if (models.length < 2 || models.length > 4) throw new Error("请设置 ZERO_G_COMPARE_MODELS 为 2..4 个准确模型 ID（逗号分隔）；可加 --list-models 查看目录。");
-  if (models.some((model) => !available.includes(model))) throw new Error("比较模型不在当前 0G 目录中，未执行付费生成。");
+  if (process.argv.includes("--list-models")) { console.log(JSON.stringify(await listModels(), null, 2)); return; }
   const names = process.argv.slice(2).filter((argument) => !argument.startsWith("--"));
   if (!names.length || names.length > 3) throw new Error("请指定 1..3 个真实仓库，例如 npm run compare-models -- vercel/next.js。");
+  const inputs = [];
+  for (const fullName of names) {
+    const input = await getRepository(fullName);
+    if (!input) throw new Error("仓库不符合收录条件，未执行生成。");
+    if (!isFormalRepository(input)) throw new Error(`仓库 ${input.fullName} 不符合正式准入：${admissionReason(input)} 未调用模型。`);
+    inputs.push(input);
+  }
+  if (!process.env.ZERO_G_API_KEY) throw new Error("缺少 ZERO_G_API_KEY，未执行付费模型比较。");
+  const models = [...new Set((process.env.ZERO_G_COMPARE_MODELS ?? "").split(",").map((model) => model.trim()).filter(Boolean))];
+  if (models.length < 2 || models.length > 4) throw new Error("请设置 ZERO_G_COMPARE_MODELS 为 2..4 个准确模型 ID（逗号分隔）；可加 --list-models 查看目录。");
+  const available = await listModels();
+  if (models.some((model) => !available.includes(model))) throw new Error("比较模型不在当前 0G 目录中，未执行付费生成。");
   const startedAt = new Date().toISOString();
   const directory = resolve("artifacts", "model-comparisons");
   await mkdir(directory, { recursive: true });
@@ -28,9 +36,8 @@ const main = async (): Promise<void> => {
   const checkpoint = async (): Promise<void> => {
     await writeFile(path, JSON.stringify({ startedAt, reports }, null, 2), { encoding: "utf8", mode: 0o600 });
   };
-  for (const fullName of names) {
-    const input = await getRepository(fullName);
-    if (!input) throw new Error("仓库不符合收录条件，未执行生成。");
+  for (const input of inputs) {
+    const fullName = input.fullName;
     const now = new Date().toISOString();
     const repository: Repository = { ...input, discoveredAt: now, syncedAt: now, lastReleaseId: null, starGrowth: null, growthDays: null };
     const item: CatalogItem = { repository, event: { id: `compare-${input.id}`, repositoryId: input.id, kind: "discovery", title: input.fullName, publishedAt: now, observedAt: now, releaseId: null, releaseTag: null, releaseUrl: null, releaseBody: null }, content: null };

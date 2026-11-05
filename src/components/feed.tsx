@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { discoveryChannelLabel } from "@/lib/discovery-labels";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import type { ReactElement } from "react";
@@ -63,6 +64,8 @@ const ProjectRow = ({ item, read, progress }: { item: CatalogItem; read: boolean
         {article?.summary || repo.description || "项目暂未提供介绍。"}
       </p>
 
+      {repo.admissionReason && <p className="pending-caption"><strong>收录依据：</strong>{repo.admissionReason}{repo.discoveryChannels?.length ? ` 发现记录：${repo.discoveryChannels.map(discoveryChannelLabel).join("、")}。` : ""}</p>}
+
       {article?.reason ? <p className="project-reason">
         <span>值得关注</span>
         {article.reason}
@@ -123,7 +126,7 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
   const loading = personal && !resolved;
   const health = (result ?? initialResult).health;
   const coverage = (result ?? initialResult).coverage;
-  const coverageRows: Array<{ label: string; page: number; received: number }> = [];
+  const coverageRows: Array<{ label: string; page: number; received: number; note?: string }> = [];
   try {
     const scope: unknown = coverage?.scope ? JSON.parse(coverage.scope) : null;
     if (scope && typeof scope === "object" && "queries" in scope && Array.isArray(scope.queries)) {
@@ -131,8 +134,9 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
         if (!value || typeof value !== "object") continue;
         const row = value as Record<string, unknown>;
         const key = typeof row.channel === "string" ? row.channel : "";
-        const label = key === "new-low-star" ? "新生小项目" : key === "recent" ? "近期创建项目" : key === "active-small" ? "活跃小项目" : key.startsWith("active-established") ? "活跃成熟项目" : key.startsWith("established") ? "成熟项目" : key.startsWith("archive") ? "历史项目补采" : `发现渠道 ${index + 1}`;
-        coverageRows.push({ label, page: typeof row.actualPage === "number" ? row.actualPage : 1, received: typeof row.received === "number" ? row.received : 0 });
+        const label = key ? discoveryChannelLabel(key) : `发现渠道 ${index + 1}`;
+        const note = row.status === "degraded" ? `趋势读取降级：${typeof row.error === "string" ? row.error.slice(0, 120) : "读取未完成"}；使用全站热门兜底。` : row.status === "skipped" ? "本轮未扫描。" : Array.isArray(row.failures) && row.failures.length ? `${row.failures.length} 个项目元数据核验未完成。` : undefined;
+        coverageRows.push({ label, note, page: typeof row.actualPage === "number" ? row.actualPage : 1, received: typeof row.received === "number" ? row.received : 0 });
       }
     }
   } catch { /* A missing coverage summary must not prevent browsing. */ }
@@ -203,13 +207,15 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
         </svg></a>
       </header>
 
+      <p className="pending-caption">正式收录门槛：至少 1,000 Star；结合官方趋势、全站热门与活跃信号发现。Star 是社区关注参考，不代表代码质量认证。低于门槛仅保留候选记录。</p>
+
       {health && <section className={`collection-health ${health.lastRunStatus === "failed" || health.stale ? "needs-attention" : ""}`} aria-label="更新状态">
         <div><strong>{health.stale ? "更新需要检查" : health.lastRunStatus === "running" ? "后台正在更新" : health.lastRunStatus === "failed" ? "最近任务异常" : health.lastRunStatus === "partial" ? "最近任务部分完成" : "持续更新状态"}</strong>
           <span>{health.lastRunAt ? `最近任务 ${fullDate(health.lastRunAt)}` : "等待首次任务"}</span></div>
         <p>可读 {health.ready} · 待整理 {health.pending} · 处理中 {health.processing} · 可重试 {health.retryable} · 已暂停 {health.exhausted}</p>
         <p>最近任务：新增 {health.discovered}，生成 {health.generated}，单项失败 {health.failed}。{health.staleRepositories > 0 ? ` ${health.staleRepositories} 个项目等待补同步。` : ""}</p>
         <details><summary>查看采集范围与更新说明</summary><p>{coverageRows.length ? `最近记录 ${coverageRows.length} 次分页查询。` : "采集范围随后台任务记录。"}分批读取公开项目，不代表全 GitHub 覆盖；小版本可合并展示。{coverage?.updatedAt ? ` 范围记录于 ${fullDate(coverage.updatedAt)}。` : ""}</p>
-          {coverageRows.length > 0 && <ul>{coverageRows.map((row, index) => <li key={index}>{row.label} · 第 {row.page} 页 · 取得 {row.received} 个候选</li>)}</ul>}
+          {coverageRows.length > 0 && <ul>{coverageRows.map((row, index) => <li key={index}>{row.label} · 第 {row.page} 页 · 取得 {row.received} 个候选{row.note ? ` · ${row.note}` : ""}</li>)}</ul>}
           <p>{health.lastSuccessfulAt ? `最近有效任务完成：${fullDate(health.lastSuccessfulAt)}。` : "尚无有效完成记录。"} 单项失败不会隐藏已有内容，暂停的内容需维护者核查后恢复。</p></details>
       </section>}
       <section className="catalog-panel" aria-label="项目列表">
@@ -257,7 +263,7 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
           <label>
             <span>Star</span>
             <select value={String(query.minStars ?? 0)} onChange={(event) => choose("minStars", event.target.value)}>
-              <option value="0">不限 Star</option>
+              <option value="0">基础门槛（1,000+）</option>
               <option value="1000">1,000 以上</option>
               <option value="10000">10,000 以上</option>
               <option value="50000">50,000 以上</option>

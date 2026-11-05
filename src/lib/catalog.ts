@@ -19,10 +19,10 @@ const health = async (): Promise<{ health: CollectionHealth; coverage: NonNullab
       count(*) FILTER (WHERE c.status IN ('failed','insufficient_sources')) AS failed_contents,
       count(*) FILTER (WHERE c.status IN ('failed','insufficient_sources') AND c.attempts < 3 AND c.error_kind IS DISTINCT FROM 'source') AS retryable,
       count(*) FILTER (WHERE c.status IN ('failed','insufficient_sources') AND (c.attempts >= 3 OR c.error_kind='source')) AS exhausted,
-      (SELECT count(*) FROM repositories WHERE is_active AND synced_at < now()-interval '2 days') AS stale_repositories,
+      (SELECT count(*) FROM repositories WHERE is_active AND admission_status='eligible' AND stars>=1000 AND synced_at < now()-interval '2 days') AS stale_repositories,
       (SELECT max(finished_at) FROM collection_runs WHERE status='completed') AS last_successful_at,
       (SELECT max(finished_at) FROM collection_runs WHERE status IN ('completed','partial')) AS last_updated_at
-      FROM learning_contents c JOIN feed_events e ON e.id=c.event_id JOIN repositories r ON r.id=e.repository_id WHERE r.is_active`),
+      FROM learning_contents c JOIN feed_events e ON e.id=c.event_id JOIN repositories r ON r.id=e.repository_id WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000`),
     queryRows(`SELECT discovery_scope,started_at,finished_at FROM collection_runs
       WHERE discovery_scope LIKE '%"queries"%' ORDER BY started_at DESC LIMIT 100`),
   ]);
@@ -55,7 +55,7 @@ export const getCatalog = async (input: CatalogQuery = {}): Promise<CatalogResul
   const empty: CatalogResult = { items: [], total: 0, page: 1, pageSize: PAGE_SIZE, languages: [], lastUpdatedAt: null, configured, error: false };
   if (!configured) return empty;
   const params: unknown[] = [];
-  const conditions = ["r.is_active = true"];
+  const conditions = ["r.is_active = true", "r.admission_status = 'eligible'", "r.stars >= 1000"];
   const add = (value: unknown): string => { params.push(value); return `$${params.length}`; };
   const q = input.q?.trim().slice(0, 200);
   if (q) {
@@ -83,7 +83,7 @@ export const getCatalog = async (input: CatalogQuery = {}): Promise<CatalogResul
   try {
     const [countRows, languageRows, updatedRows, state] = await Promise.all([
       queryRows(`SELECT count(*) AS total FROM feed_events e ${ITEM_JOINS} ${where}`, params),
-      queryRows("SELECT DISTINCT language FROM repositories WHERE is_active = true AND language IS NOT NULL ORDER BY language"),
+      queryRows("SELECT DISTINCT language FROM repositories WHERE is_active = true AND admission_status='eligible' AND stars>=1000 AND language IS NOT NULL ORDER BY language"),
       queryRows("SELECT max(finished_at) AS updated FROM collection_runs WHERE status IN ('completed', 'partial')"), health(),
     ]);
     const total = Number(countRows[0]?.total ?? 0);
@@ -107,7 +107,7 @@ export const getProject = async (id: string): Promise<ProjectResult | null> => {
     if (!rows.length) return null;
     const items = rows.map(mapCatalogItem);
     const relatedRows = await queryRows(`SELECT ${ITEM_SELECT} FROM feed_events e ${ITEM_JOINS}
-      WHERE r.is_active AND r.id<>$1 AND e.kind='discovery' AND
+      WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000 AND r.id<>$1 AND e.kind='discovery' AND
       (r.topics ?| $2::text[] OR ($3::text IS NOT NULL AND r.language=$3))
       ORDER BY (r.topics ?| $2::text[]) DESC,r.stars DESC LIMIT 5`, [id, items[0].repository.topics, items[0].repository.language]);
     return { repository: items[0].repository, item: items[0], updates: items.filter((item) => item.event.kind !== "discovery"), related: relatedRows.map(mapCatalogItem) };

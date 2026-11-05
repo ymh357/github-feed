@@ -126,3 +126,12 @@ ON CONFLICT DO NOTHING;
 ALTER TABLE repositories ADD COLUMN IF NOT EXISTS last_announcement_sha text;
 ALTER TABLE feed_events DROP CONSTRAINT IF EXISTS feed_events_kind_check;
 ALTER TABLE feed_events ADD CONSTRAINT feed_events_kind_check CHECK (kind IN ('discovery','release','announcement'));
+
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS admission_status text NOT NULL DEFAULT 'eligible';
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS discovery_channels jsonb NOT NULL DEFAULT '[]';
+ALTER TABLE repositories ADD COLUMN IF NOT EXISTS admission_reason text;
+UPDATE repositories SET admission_status='candidate',is_active=false,
+  admission_reason='低于1000Star正式收录门槛，保留为候选，不生成学习解读。' WHERE stars<1000;
+UPDATE repositories SET admission_status='eligible',
+  admission_reason=COALESCE(NULLIF(admission_reason,''),'符合1000Star门槛，旧收录未记录渠道。') WHERE stars>=1000;
+CREATE INDEX IF NOT EXISTS repositories_admission_idx ON repositories(admission_status,stars DESC,id);

@@ -1,4 +1,5 @@
 import type { GitHubRepositoryInput, ReleaseInput } from "./types";
+import { admissionReason, FORMAL_STAR_FLOOR, getTrendingNames, isFormalRepository, withDiscoveryChannel } from "./discovery-policy";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -100,6 +101,7 @@ export const parseRepository = (value: unknown): GitHubRepositoryInput | null =>
     language: typeof raw.language === "string" ? raw.language : null,
     topics: Array.isArray(raw.topics) ? raw.topics.filter((topic): topic is string => typeof topic === "string").slice(0, 30) : [],
     stars: integer(raw.stargazers_count, "stargazers_count"),
+    admissionReason: admissionReason({ stars: integer(raw.stargazers_count, "stargazers_count") }),
     forks: integer(raw.forks_count, "forks_count"),
     createdAt,
     pushedAt,
@@ -109,6 +111,8 @@ export const parseRepository = (value: unknown): GitHubRepositoryInput | null =>
 
 export interface DiscoveryResult {
   repositories: GitHubRepositoryInput[];
+  candidates?: GitHubRepositoryInput[];
+  degraded?: boolean;
   scope: string;
   incomplete: boolean;
   cursorUpdates?: Array<{ key: string; page: number }>;
@@ -120,52 +124,101 @@ export interface DiscoveryCursor {
 }
 
 export const discoverRepositories = async (limit: number, now: Date = new Date(), cursor?: DiscoveryCursor): Promise<DiscoveryResult> => {
+  if (!Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("GitHub 发现上限应为 1..200。");
   const day = Math.floor(now.getTime() / 86_400_000);
   const year = 2008 + (day % (now.getUTCFullYear() - 2008 + 1));
   const date = (days: number): string => new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
   const common = "is:public fork:false archived:false";
-  const partition = `created:${year}-01-01..${year}-12-31`;
-  const channels = [
-    { key: "new-low-star", query: `${common} stars:5..999 created:>=${date(30)}`, sort: "updated" },
-    { key: "recent", query: `${common} stars:>=100 created:>=${date(90)}`, sort: "stars" },
-    { key: "active-small", query: `${common} stars:20..999 pushed:>=${date(7)}`, sort: "updated" },
-    { key: `established-${year}`, query: `${common} stars:>=1000 ${partition}`, sort: "stars" },
-    { key: `active-established-${year}`, query: `${common} stars:>=1000 pushed:>=${date(7)} ${partition}`, sort: "updated" },
-    { key: `archive-${year}`, query: `${common} stars:>=100 created:${year}-01-01..${year}-12-31`, sort: "stars" },
-  ];
-  const repositories = new Map<string, GitHubRepositoryInput>();
+  const formal = new Map<string, GitHubRepositoryInput>();
+  const candidates = new Map<string, GitHubRepositoryInput>();
+  const metadata = new Map<string, GitHubRepositoryInput>();
   const scopes: Array<Record<string, unknown>> = [];
   const cursorUpdates: Array<{ key: string; page: number }> = [];
   let incomplete = false;
-  const offset = day % channels.length;
-  const ordered = [...channels.slice(offset), ...channels.slice(0, offset)];
-  for (const [index, channel] of ordered.entries()) {
-    const quota = Math.floor(limit / channels.length) + (index < limit % channels.length ? 1 : 0);
-    if (!quota) continue;
-    const perPage = Math.min(100, quota);
-    const cursorKey = `${channel.key}:size-${perPage}`;
-    let page = Math.max(1, Math.min(Math.floor(1000 / perPage), cursor ? await cursor.getDiscoveryCursor(cursorKey) : 1));
-    // Up to three pages per channel replenish duplicate candidates without an unbounded search.
-    let accepted = 0;
-    for (let attempt = 0; attempt < 3 && accepted < quota; attempt += 1) {
-      const params = new URLSearchParams({ q: channel.query, sort: channel.sort, order: "desc", per_page: String(perPage), page: String(page) });
-      const raw = record(await githubJson(`/search/repositories?${params}`));
-      if (!Array.isArray(raw.items)) throw new Error("GitHub 搜索结果缺少项目列表。");
-      const total = typeof raw.total_count === "number" ? raw.total_count : null;
-      const bounded = raw.incomplete_results === true || (total !== null && total > raw.items.length);
-      incomplete ||= bounded;
-      scopes.push({ channel: channel.key, query: channel.query, sort: channel.sort, actualPage: page, perPage, received: raw.items.length, total, incomplete: bounded });
-      for (const item of raw.items) {
-        const repository = parseRepository(item);
-        if (repository && !repositories.has(repository.id) && accepted < quota) { repositories.set(repository.id, repository); accepted += 1; }
+  let degraded = false;
+  const retain = (repository: GitHubRepositoryInput, channel: string): string => {
+    const previous = formal.get(repository.id) ?? candidates.get(repository.id);
+    const enriched = withDiscoveryChannel({ ...repository, discoveryChannels: previous?.discoveryChannels ?? repository.discoveryChannels }, channel);
+    metadata.set(repository.fullName.toLowerCase(), enriched);
+    if (isFormalRepository(repository)) { formal.set(repository.id, enriched); candidates.delete(repository.id); }
+    else if (candidates.size < 5 || candidates.has(repository.id)) candidates.set(repository.id, enriched);
+    return repository.id;
+  };
+  const search = async (channel: string, query: string, sort: "stars" | "updated", perPage: number, page = 1): Promise<{ ids: string[]; nextPage: number }> => {
+    const params = new URLSearchParams({ q: query, sort, order: "desc", per_page: String(perPage), page: String(page) });
+    const raw = record(await githubJson(`/search/repositories?${params}`));
+    if (!Array.isArray(raw.items)) throw new Error("GitHub 搜索结果缺少项目列表。");
+    const total = typeof raw.total_count === "number" ? raw.total_count : null;
+    const bounded = raw.incomplete_results === true || (total !== null && total > raw.items.length);
+    incomplete ||= bounded;
+    const ids = raw.items.map(parseRepository).filter((repository): repository is GitHubRepositoryInput => repository !== null).map((repository) => retain(repository, channel));
+    scopes.push({ channel, query, sort, actualPage: page, perPage, received: raw.items.length, total, incomplete: bounded, status: "ok" });
+    const last = total === null ? Math.floor(1000 / perPage) : Math.max(1, Math.min(Math.floor(1000 / perPage), Math.ceil(total / perPage)));
+    return { ids, nextPage: raw.items.length < perPage || page >= last ? 1 : page + 1 };
+  };
+  const pageSize = Math.min(100, Math.max(10, limit));
+  const popularQuota = limit >= 20 ? 10 : Math.ceil(limit / 2);
+  const archiveQuota = limit >= 10 ? Math.max(1, Math.floor(limit / 5)) : 0;
+  const trendingBudget = Math.min(25, limit - popularQuota - archiveQuota);
+  // Fixed head queries run every day regardless of archive partition or cursor position.
+  const popular = await search("github-popular", `${common} stars:>=${FORMAL_STAR_FLOOR}`, "stars", pageSize);
+  const active = await search("github-active-popular", `${common} stars:>=${FORMAL_STAR_FLOOR} pushed:>=${date(7)}`, "stars", pageSize);
+  const trending: string[][] = [];
+  for (const period of ["daily", "weekly"] as const) {
+    const channel = `github-trending-${period}`;
+    const ids: string[] = [];
+    const failures: Array<{ repository: string; error: string }> = [];
+    try {
+      const page = await getTrendingNames(period);
+      const names = page.names;
+      let requests = 0;
+      let verified = 0;
+      for (const name of names) {
+        try {
+          const cached = metadata.get(name.toLowerCase());
+          if (!cached && requests >= trendingBudget) break;
+          if (!cached) requests += 1;
+          const repository = cached ?? await getRepository(name);
+          verified += 1;
+          if (repository) ids.push(retain(repository, channel));
+        } catch (error) {
+          failures.push({ repository: name, error: error instanceof GitHubError ? error.message : "GitHub 项目元数据核验失败。" });
+          if (error instanceof GitHubError && ([403, 429].includes(error.status) || error.status >= 500)) break;
+        }
       }
-      const lastPage = total === null ? Math.floor(1000 / perPage) : Math.max(1, Math.min(Math.floor(1000 / perPage), Math.ceil(total / perPage)));
-      page = raw.items.length < perPage || page >= lastPage ? 1 : page + 1;
-      cursorUpdates.push({ key: cursorKey, page });
-      if (!raw.items.length) break;
+      scopes.push({ channel, url: page.url, actualPage: 1, received: page.names.length, verified, eligible: ids.filter((id) => formal.has(id)).length,
+        bytes: page.bytes, observedAt: page.observedAt, metadataRequests: requests, failures, status: failures.length ? "degraded" : trendingBudget ? "ok" : "skipped", reason: trendingBudget ? null : "正式配额已分配，不额外请求元数据。", incomplete: verified < page.names.length });
+      if (failures.length) { degraded = true; incomplete = true; }
+    } catch (error) {
+      degraded = true; incomplete = true;
+      scopes.push({ channel, url: `https://github.com/trending?since=${period}`, actualPage: 1, received: 0, status: "degraded",
+        error: error instanceof Error && error.message.startsWith("GitHub Trending") ? error.message : "GitHub Trending 页面读取失败。", fallback: "github-popular / github-active-popular", incomplete: true });
     }
+    trending.push(ids);
   }
-  return { repositories: [...repositories.values()], cursorUpdates, scope: JSON.stringify({ queries: scopes, policy: "bounded-multi-channel; stars and activity are discovery signals, not verified quality or growth" }), incomplete };
+  const recent = await search("github-recent-established", `${common} stars:>=${FORMAL_STAR_FLOOR} created:>=${date(90)}`, "stars", Math.min(50, pageSize));
+  const selected = new Set<string>();
+  const select = (id: string, maximum = limit): void => { if (selected.size < maximum && formal.has(id)) selected.add(id); };
+  popular.ids.slice(0, popularQuota).forEach((id) => select(id));
+  const currentMaximum = limit - archiveQuota;
+  const buckets = [trending[0], trending[1], active.ids, recent.ids];
+  for (let index = 0; index < pageSize && selected.size < currentMaximum; index += 1) for (const bucket of buckets) if (bucket[index]) select(bucket[index], currentMaximum);
+  popular.ids.forEach((id) => select(id, currentMaximum));
+  // Only fetch a rotating page that fits in full; no dropped eligible item may be skipped by its cursor.
+  const archiveSize = Math.min(100, limit - selected.size);
+  if (archiveSize > 0) {
+    const archiveKey = `archive-formal-${year}:size-${archiveSize}`;
+    const archivePage = Math.max(1, Math.min(Math.floor(1000 / archiveSize), cursor ? await cursor.getDiscoveryCursor(archiveKey) : 1));
+    const archive = await search(`github-archive-${year}`, `${common} stars:>=${FORMAL_STAR_FLOOR} created:${year}-01-01..${year}-12-31`, "stars", archiveSize, archivePage);
+    archive.ids.forEach((id) => select(id));
+    if (archive.ids.every((id) => !formal.has(id) || selected.has(id))) cursorUpdates.push({ key: archiveKey, page: archive.nextPage });
+  } else scopes.push({ channel: `github-archive-${year}`, actualPage: 0, received: 0, status: "skipped", reason: "本轮配额已满，未读取或推进历史页。" });
+  popular.ids.forEach((id) => select(id));
+  if (limit >= 20) await search("early-candidate", `${common} stars:5..999 created:>=${date(30)}`, "updated", 5);
+  else scopes.push({ channel: "early-candidate", status: "skipped", reason: "本轮优先保障正式热门项目，候选渠道不占正式配额。", actualPage: 0, received: 0 });
+  return { repositories: [...selected].map((id) => formal.get(id)!), candidates: [...candidates.values()], cursorUpdates, incomplete, degraded,
+    scope: JSON.stringify({ queries: scopes, formalStarFloor: FORMAL_STAR_FLOOR, formalSelected: selected.size, candidatesRetained: candidates.size,
+      priority: "fixed popular head, then daily/weekly Trending, active popular and rotating archive", policy: ">=1000 Star formal admission; below-floor candidates never consume formal quota or trigger AI; heat is not a quality guarantee; bounded coverage" }) };
 };
 
 export const getRepository = async (fullName: string, repositoryId?: string): Promise<GitHubRepositoryInput | null> => {
