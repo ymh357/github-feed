@@ -1,0 +1,54 @@
+name: 每日项目学习更新
+
+on:
+  schedule:
+    - cron: "23 22 * * *"
+  workflow_dispatch:
+    inputs:
+      discovery_only:
+        description: "仅同步项目与版本，不调用模型"
+        required: false
+        type: boolean
+        default: false
+      limit:
+        description: "本次发现、同步及生成的各阶段处理上限（1..200）"
+        required: false
+        type: string
+        default: "50"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-feed-collection
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      ZERO_G_API_KEY: ${{ secrets.ZERO_G_API_KEY }}
+      ZERO_G_MODEL: ${{ secrets.ZERO_G_MODEL }}
+      GITHUB_TOKEN: ${{ github.token }}
+      COLLECTION_RUNTIME_SECONDS: "1200"
+      COLLECTION_LIMIT: ${{ inputs.limit || '50' }}
+      DISCOVERY_ONLY: ${{ inputs.discovery_only || 'false' }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: 初始化数据库
+        run: npm run db:migrate
+      - name: 发现、同步和生成学习内容
+        shell: bash
+        run: |
+          arguments=(--limit "$COLLECTION_LIMIT")
+          if [[ "$DISCOVERY_ONLY" == "true" ]]; then
+            arguments+=(--discovery-only)
+          fi
+          npm run collect -- "${arguments[@]}"
