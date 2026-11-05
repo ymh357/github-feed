@@ -22,4 +22,12 @@
 - 无网络候选拦截验证：7/999Star的generateLearning零fetch；compare候选仅GitHub元数据请求，零模型目录/付费请求；1000Star可进入正常路径。
 - npx tsc --noEmit、npx eslint . --quiet、npm run build 通过；未新增依赖或测试文件。
 - 独立审查已确认候选旁路、游标因果、小limit配额修复，无未解决确定P1/P2。
-- REA真实有界解读、部署与新版云端发现将在完成后补记。
+
+## 最终上线
+
+- REA真实生成与事实复核完成，run 68bc2615-08d4-4c0b-949d-6ef9db5a79a1，generated1/failed0。正式详情 https://github-feed-nine.vercel.app/projects/1209966933 已可读What/Why/How并显示实际发现渠道；未执行REA代码或安装软件。
+- 正式生产部署 dpl_7eAXYbGd9rK4UCoynewoBo6oQSX7，READY。线上API搜索REA返回1条ready/eligible；cinepulse返回0；默认列表不存在低于1000Star项目。
+- 云端新版发现 https://github.com/ymh357/github-feed/actions/runs/42030432204 执行结束。业务run 106c5f68-865d-404d-8793-031f207c72b8 为partial：openclaw版本响应仍触发4MB上限，其余项目元数据已保存；archive-formal-2022:size-4实际推进至page2（20:50:40北京时间）。证实单项版本错误不再卡住已保存发现进度，未把partial说成全部同步成功。
+- 页面候选标识、准入依据及渠道记录已上线；截图保存在忽略目录artifacts/rea-admission-production.png。
+- 源码已提交公开仓库，密钥扫描通过；无新增依赖/测试文件，无原始诊断或私有配置提交。
+- Star仅作为最低关注度门槛，不能证明项目代码质量或保证全GitHub热门覆盖；Trend页面变动和API限流仍通过降级记录与后续续跑处理。
