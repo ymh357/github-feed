@@ -20,6 +20,10 @@
 - 验证所有5个摘要的公开成员正文为空，后台mapCatalogItem仍读取原始正文。
 - selectSections在240/400/666/1499/1500/8000字符预算下保留实际证据，输出不超预算。
 - 真生成任务e9440428-0658-4124-b9e4-bc05f424cb7e处理24成员摘要，模型缺少changes字段，被校验拦截并标为validation失败。未发布，按首次失败保留1小时退避，没有重置次数；已明确提示摘要也必须返回changes，保持原校验要求。
+- 第二份16成员摘要任务1ea5ac97-accc-40f5-bd10-d8c7be4c5aab返回必填字段，但未通过独立事实审核，同样不发布并退避；没有通过降低审核门槛获取成功样本。因此本轮验证覆盖真实失败与续跑路径，尚未验证摘要文章成功发布。
+- 实库首份摘要attempts=1、validation、next_retry_at与updated_at差3600秒；退避期间不出现在getPendingEvents结果中。
+- 最终npx tsc --noEmit、npx eslint . --quiet、npm run build通过，独立复审无未解决P1/P2。
+- 生产部署dpl_F3KH2Wz52y4oTD65WcHDzYu2Loop为READY并绑定正式域名；首页及摘要详情HTTP200。真实POST /api/catalog检索Magpie返回HTTP200、50623字节，两份摘要分别显示UTC 11月5日24成员、11月6日16成员，成员正文均为空。试跑后待整理46、失败5、处理中0、既有文章19，新增两份失败摘要仍待重试。
 
 ## 重试规则
 
