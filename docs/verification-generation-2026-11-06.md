@@ -24,6 +24,17 @@
 - 无网络参数分支验证：max_tokens、completion-only、双声明、元数据缺漏均包含cap；非文本/无OpenAI格式仍拒绝；HTTP400只有一次请求，不去掉cap重发。
 - 受控临时空Key子进程验证：退出1，任务e12c1a3b-7a8a-4367-804a-25d300e2a75c已记录failed/finished/message；全库attempts前后均17，没有付费请求。只对子进程覆盖空值，正式环境配置未改。
 - health实库读取可识别该预检失败，最近实际产出仍为11月5日20:48，并准确显示47+47项待整理。
-- TypeScript、ESLint初轮通过。云端恢复、实际消化数量和最终部署将在完成后补记。
+- 最终npx tsc --noEmit、npx eslint . --quiet、npm run build及Vercel生产构建均通过；独立复审无未解决确定P1/P2。
 
 不新增依赖或自动化测试文件，不修改准入标准，不删除队列或用失败状态假装产出。
+
+## 恢复验收
+
+- 生产部署dpl_4anTtr1zVmZDkvMtDLm4nbMp3zLJ已READY并指向https://github-feed-nine.vercel.app。
+- 新版云端生成https://github.com/ymh357/github-feed/actions/runs/42187937066已结束；业务run 2f4a6a2e-037c-418c-b5cf-fdf0f4c550ef为partial：8项中generated6/failed2，没有再次卡在模型目录预检。
+- 新发布：f/prompts.chat、NandhaKishorM/laya（旧失败重试）、openxla/xla、AUTOMATIC1111/stable-diffusion-webui、deepseek-ai/deepseek-harness、codecrafters-io/build-your-own-x，均通过字段/引用/事实复核。
+- sindresorhus/awesome与public-apis/public-apis的草稿未通过事实复核，不发布，保留独立失败状态；不是全批失败，也未放宽审核。
+- 生产API确认：可读13→19，pending94→87，processing0；余下40项项目介绍、47项动态。8项包含一项原failed重试，7项来自pending，故pending减少7而新增可读6，并非清空或伪造任务。
+- 受控无内容命令 --stage generate --discovery-only 完成的run 3f14fbf0-9373-44d2-a383-794dcba20ead，generatesContent=false。线上lastAny=completed但generation仍指向真实running任务，随后实际产出时间更新；证明无产出任务不会掩盖真实生成状态或刷新成功产出。
+- HTML/公开catalog API HTTP200，展示独立生成状态、最后实际产出、待整理分类；无需登录。没有更换模型/密钥、增加依赖或改变原生成频率。
+- 剩余队列由原每3小时生成计划分批处理；GitHub调度可能延迟，不承诺立即清空或每条必能通过内容审核。
