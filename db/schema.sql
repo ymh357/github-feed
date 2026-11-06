@@ -125,7 +125,7 @@ ON CONFLICT DO NOTHING;
 
 ALTER TABLE repositories ADD COLUMN IF NOT EXISTS last_announcement_sha text;
 ALTER TABLE feed_events DROP CONSTRAINT IF EXISTS feed_events_kind_check;
-ALTER TABLE feed_events ADD CONSTRAINT feed_events_kind_check CHECK (kind IN ('discovery','release','announcement'));
+ALTER TABLE feed_events ADD CONSTRAINT feed_events_kind_check CHECK (kind IN ('discovery','release','announcement','release_digest'));
 
 ALTER TABLE repositories ADD COLUMN IF NOT EXISTS admission_status text NOT NULL DEFAULT 'eligible';
 ALTER TABLE repositories ADD COLUMN IF NOT EXISTS discovery_channels jsonb NOT NULL DEFAULT '[]';
@@ -135,3 +135,9 @@ UPDATE repositories SET admission_status='candidate',is_active=false,
 UPDATE repositories SET admission_status='eligible',
   admission_reason=COALESCE(NULLIF(admission_reason,''),'符合1000Star门槛，旧收录未记录渠道。') WHERE stars>=1000;
 CREATE INDEX IF NOT EXISTS repositories_admission_idx ON repositories(admission_status,stars DESC,id);
+
+ALTER TABLE feed_events ADD COLUMN IF NOT EXISTS digest_event_id text REFERENCES feed_events(id);
+ALTER TABLE feed_events ADD COLUMN IF NOT EXISTS digest_day date;
+ALTER TABLE feed_events ADD COLUMN IF NOT EXISTS release_entries jsonb NOT NULL DEFAULT '[]';
+CREATE INDEX IF NOT EXISTS feed_events_digest_member_idx ON feed_events(digest_event_id) WHERE digest_event_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS feed_events_digest_day_idx ON feed_events(repository_id,digest_day) WHERE kind='release_digest';

@@ -58,7 +58,10 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
     return href ? [{ ...source, href, sourceNumber: index + 1 }] : [];
   });
   const announcement = event.kind === "announcement";
-  const title = isUpdate ? `${repo.fullName} ${announcement ? "官方文档变化" : event.releaseTag ?? "版本更新"}` : repo.fullName;
+  const digest = event.kind === "release_digest";
+  const digestDay = event.digestDay ?? event.publishedAt.slice(0, 10);
+  const releaseEntries = event.releaseEntries ?? [];
+  const title = isUpdate ? `${repo.fullName} ${digest ? "版本变化摘要" : announcement ? "官方文档变化" : event.releaseTag ?? "版本更新"}` : repo.fullName;
   return <div className="detail-shell">
     <header className="detail-topbar">
       <Brand />
@@ -78,7 +81,7 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
           <span>/</span>
         </>}
         <span>
-          {isUpdate ? announcement ? "官方文档变化" : event.releaseTag ?? "版本更新" : repo.fullName}
+          {isUpdate ? digest ? "版本变化摘要" : announcement ? "官方文档变化" : event.releaseTag ?? "版本更新" : repo.fullName}
         </span>
       </nav>
 
@@ -86,7 +89,7 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
         <div className="detail-heading">
           <div className="detail-heading-label">
             <span className={`event-badge ${isUpdate ? "release" : ""}`}>
-              {repo.admissionStatus === "candidate" ? "候选项目 · 未正式收录" : isUpdate ? announcement ? "官方文档变化" : "正式版本更新" : "项目学习"}
+              {repo.admissionStatus === "candidate" ? "候选项目 · 未正式收录" : isUpdate ? digest ? "版本变化摘要" : announcement ? "官方文档变化" : "正式版本更新" : "项目学习"}
             </span>
             {repo.language && <span className="language-stat">
               <i />
@@ -100,6 +103,7 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
             {article?.summary || repo.description || "项目暂未提供介绍。"}
           </p>
           {repo.admissionReason && <p className="pending-caption"><strong>{repo.admissionStatus === "candidate" ? "候选原因：" : "收录依据："}</strong>{repo.admissionReason}{repo.discoveryChannels?.length ? ` 发现记录：${repo.discoveryChannels.map(discoveryChannelLabel).join("、")}。` : ""}</p>}
+          {digest && <p className="grouped-caption">{digestDay}（UTC） · 合并 {releaseEntries.length} 个正式版本</p>}
           <div className="detail-stats">
             <span><strong>
               {repo.stars.toLocaleString()}
@@ -121,6 +125,14 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
 
       <div className="detail-grid">
         <article className="learning-article">
+          {digest && <Section id="digest-releases" title="摘要包含的版本">
+            <p className="related-explanation">按 UTC 日期 {digestDay} 汇总，共 {releaseEntries.length} 个版本。摘要合并解读，官方说明仍可逐条查看。</p>
+            <ul className="takeaways-list">{releaseEntries.map((entry) => {
+              const href = safeHref(entry.url);
+              return <li key={entry.id}>{href?.startsWith(`https://github.com/${repo.fullName}/releases/`) ? <a className="text-link" href={href} target="_blank" rel="noreferrer">{entry.tag} · {entry.title || "官方版本说明"}</a> : <span>{entry.tag} · {entry.title}</span>}<p className="related-explanation">发布于 {fullDate(entry.publishedAt)}</p></li>;
+            })}</ul>
+          </Section>}
+
           {article && <div className="version-picker">
             <label htmlFor="article-version">解读深度与历史版本</label>
             <select id="article-version" value={selectedVersion ? versionId : "current"} onChange={(event) => setVersionId(event.target.value)}>
@@ -208,6 +220,7 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
         <aside className="detail-aside">
           {article && <nav className="article-toc" aria-label="文章目录">
             <h2>本页内容</h2>
+            {digest && <a href="#digest-releases">摘要包含的版本</a>}
             {isUpdate && article.changes && <a href="#changes">这次更新了什么</a>}
             <a href="#what"><span>What</span>它解决什么问题</a>
             <a href="#why"><span>Why</span>为什么值得关注</a>
@@ -277,7 +290,7 @@ export const Detail = ({ item, updates, related = [], isUpdate = false }: { item
             <h2>版本动态</h2>
             {updates.map((update) => <Link key={update.event.id} href={`/updates/${encodeURIComponent(update.event.id)}`}>
               <strong>
-                {update.event.releaseTag ?? update.event.title}
+                {update.event.kind === "release_digest" ? `版本变化摘要 · ${update.event.digestDay ?? update.event.publishedAt.slice(0, 10)}（UTC） · ${update.event.releaseEntries?.length ?? 0} 个版本` : update.event.releaseTag ?? update.event.title}
               </strong>
               <span>
                 {fullDate(update.event.publishedAt)}

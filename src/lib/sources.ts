@@ -5,6 +5,10 @@ export class InsufficientSourcesError extends Error {}
 
 export const selectSections = (text: string, maximum: number): string => {
   if (text.length <= maximum) return text;
+  if (maximum < 1500) {
+    const prefix = `[读取范围：原文 ${text.length} 字符，仅提供开头节选，未提供部分不可作为结论依据]\n`;
+    return (prefix + text.slice(0, Math.max(0, maximum - prefix.length))).slice(0, maximum);
+  }
   const starts = [...text.matchAll(/^#{1,4}\s+.+$/gm)].map((match) => match.index ?? 0);
   const sections = [0, ...starts.filter((index) => index > 0)].map((start, index, positions) => ({ start, end: positions[index + 1] ?? text.length }));
   const selected: Array<{ start: number; end: number }> = [];
@@ -52,7 +56,21 @@ export const collectSources = async (item: CatalogItem, depth: ContentDepth = "q
   };
   await addFile(readme.path, "readme", depth === "deep" ? 24_000 : 18_000);
   if (!sources.length || (sources[0].text?.trim().length ?? 0) < 150) throw new InsufficientSourcesError("README 信息不足，无法生成可靠学习内容。");
-  if (event.kind !== "discovery" && event.releaseUrl) {
+  if (event.kind === "release_digest") {
+    const entries = event.releaseEntries ?? [];
+    if (!entries.length || entries.length > 40 || !entries.some((entry) => entry.body.trim())) {
+      throw new InsufficientSourcesError("资料中的版本摘要成员缺失、超限或全部没有原始说明。");
+    }
+    const allowance = Math.floor(Math.min(16_000, remaining) / entries.length) - 160;
+    for (const entry of entries) {
+      const body = entry.body.trim() || "此版本未提供原始发布说明，不能据此推断具体变化。";
+      const excerpt = selectSections(body, allowance);
+      const text = `版本 ${entry.tag}，发布于 ${entry.publishedAt}。\n${excerpt}`;
+      remaining -= text.length;
+      sources.push({ url: entry.url, title: `${entry.tag} · ${entry.title}`, kind: "release", fetchedAt,
+        revision: entry.tag, readingRange: `摘要覆盖 ${entries.length} 个正式版本；本条已保存正文 ${entry.body.length} 字符${entry.bodyTruncated ? "（保存时已截断）" : ""}，提供节选 ${excerpt.length} 字符；未提供部分不作依据`, text });
+    }
+  } else if (event.kind !== "discovery" && event.releaseUrl) {
     if (!event.releaseBody?.trim()) throw new InsufficientSourcesError("版本或公告缺少原始说明，无法可靠解释此次变化。");
     const text = selectSections(event.releaseBody, Math.min(8_000, remaining));
     remaining -= text.length;

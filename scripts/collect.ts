@@ -136,6 +136,10 @@ const main = async (): Promise<void> => {
         }
       }
     }
+    if (!stopped) {
+      const digests = await store.reconcileReleaseDigests();
+      if (digests > 0) console.log(`已合并小版本变化，新增 ${digests} 个摘要任务。`);
+    }
     if (generate && !stopped) {
       if (!repositoryName) await store.queueRefresh(Math.min(limit, 5));
       if (!depth && !repositoryName) for (const repository of await store.getDeepCandidates(2)) await store.resetContent(repository.fullName, { depth: "deep" });

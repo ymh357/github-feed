@@ -1,4 +1,4 @@
-export type EventKind = "discovery" | "release" | "announcement";
+export type EventKind = "discovery" | "release" | "announcement" | "release_digest";
 export type ContentStatus = "pending" | "processing" | "ready" | "failed" | "insufficient_sources";
 export type ContentDepth = "quick" | "deep";
 export type SortKey = "recent" | "stars" | "created" | "pushed" | "growth";
@@ -28,6 +28,16 @@ export interface Repository {
   discoveryChannels?: string[];
 }
 
+export interface DigestReleaseEntry {
+  id: string;
+  tag: string;
+  title: string;
+  url: string;
+  body: string;
+  publishedAt: string;
+  bodyTruncated?: boolean;
+}
+
 export interface FeedEvent {
   id: string;
   repositoryId: string;
@@ -41,6 +51,9 @@ export interface FeedEvent {
   releaseBody: string | null;
   importance?: "major" | "minor";
   groupedReleaseCount?: number;
+  digestEventId?: string | null;
+  digestDay?: string | null;
+  releaseEntries?: DigestReleaseEntry[];
 }
 
 export interface ContentSection {
@@ -234,6 +247,7 @@ export interface StoreContract {
   upsertRepository(input: GitHubRepositoryInput): Promise<{ repository: Repository; isNew: boolean }>;
   recordSnapshot(repositoryId: string, stars: number): Promise<void>;
   recordRelease(repositoryId: string, release: ReleaseInput, baseline: boolean): Promise<void>;
+  reconcileReleaseDigests(): Promise<number>;
   getRepositoriesToSync(limit: number): Promise<Repository[]>;
   recordSyncAttempt(repositoryId: string): Promise<void>;
   retireRepository(repositoryId: string): Promise<void>;

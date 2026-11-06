@@ -33,11 +33,14 @@ export const Brand = (): ReactElement => <Link href="/" className="brand" aria-l
   <span>GitHub <strong>Feed</strong><small>你的开源学习流</small></span>
 </Link>;
 
-const itemHref = (item: CatalogItem): string => item.event.kind !== "discovery" ? `/updates/${encodeURIComponent(item.event.id)}` : `/projects/${item.repository.id}`;
+const itemHref = (item: CatalogItem): string => item.event.kind !== "discovery" ? `/updates/${encodeURIComponent(item.event.digestEventId ?? item.event.id)}` : `/projects/${item.repository.id}`;
 
 const ProjectRow = ({ item, read, progress }: { item: CatalogItem; read: boolean; progress?: string }) => {
   const { repository: repo, event, content } = item;
   const article = content?.article;
+  const digest = event.kind === "release_digest";
+  const digestDay = event.digestDay ?? event.publishedAt.slice(0, 10);
+  const releaseEntries = event.releaseEntries ?? [];
   const [owner, ...name] = repo.fullName.split("/");
   return <article className={`project-row ${read ? "has-read" : ""}`}>
 
@@ -53,8 +56,8 @@ const ProjectRow = ({ item, read, progress }: { item: CatalogItem; read: boolean
             {name.join("/") || owner}
           </Link>
         </h2>
-        <span className={`event-badge ${event.kind === "release" ? "release" : ""}`}>
-          {event.kind === "announcement" ? "官方文档变化" : event.kind === "release" ? event.importance === "major" ? `重要版本 ${event.releaseTag ?? ""}` : event.releaseTag ?? "版本更新" : "新收录"}
+        <span className={`event-badge ${event.kind === "release" || digest ? "release" : ""}`}>
+          {digest ? "版本变化摘要" : event.kind === "announcement" ? "官方文档变化" : event.kind === "release" ? event.importance === "major" ? `重要版本 ${event.releaseTag ?? ""}` : event.releaseTag ?? "版本更新" : "新收录"}
         </span>
         {read && <span className="read-badge">已读</span>}
         {progress && progress !== "none" && <span className="read-badge">{progress === "plan" ? "待学习" : progress === "reading" ? "正在学习" : "已实践"}</span>}
@@ -74,7 +77,10 @@ const ProjectRow = ({ item, read, progress }: { item: CatalogItem; read: boolean
       </p>}
 
       {content?.errorSummary && content.status !== "ready" && <p className="content-error-summary">{content.errorSummary}{(content.attempts ?? 0) >= 3 ? " · 已暂停自动重试" : content.nextRetryAt ? ` · ${fullDate(content.nextRetryAt)} 后可重试` : ""}</p>}
-      {(event.groupedReleaseCount ?? 0) > 1 && <p className="grouped-caption">同一周合并 {event.groupedReleaseCount} 个小版本，<Link href={`/projects/${repo.id}`}>查看全部版本动态</Link></p>}
+      {digest && <details className="grouped-caption">
+        <summary>{digestDay}（UTC） · 合并 {releaseEntries.length} 个版本 · 查看成员</summary>
+        <ul>{releaseEntries.map((entry) => <li key={entry.id}>{entry.url.startsWith(`https://github.com/${repo.fullName}/releases/`) ? <a href={entry.url} target="_blank" rel="noreferrer">{entry.tag} · 官方版本说明</a> : <span>{entry.tag}</span>}</li>)}</ul>
+      </details>}
       <div className="project-meta">
         <span className="star-stat" title={`${repo.stars.toLocaleString()} Star`}>
           <Star />
@@ -107,7 +113,11 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
   const [retry, setRetry] = useState(0);
   const [personalResult, setPersonalResult] = useState<{ key: string; result?: CatalogResult; error?: string } | null>(null);
   const personal = view === "favorites" || (query.readState ?? "all") !== "all";
-  const requestQuery = useMemo(() => ({ ...query, ...(view === "favorites" ? { ids: favorites, view: "projects" as const } : {}), ...(query.readState && query.readState !== "all" ? { readEventIds: read } : {}) }), [query, view, favorites, read]);
+  const requestQuery = useMemo(() => {
+    const request = { ...query, ...(view === "favorites" ? { ids: favorites, view: "projects" as const } : {}), ...(query.readState && query.readState !== "all" ? { readEventIds: read } : {}) };
+    delete request.groupMinorReleases;
+    return request;
+  }, [query, view, favorites, read]);
   const requestKey = JSON.stringify(requestQuery);
   useEffect(() => {
     if (!personal) return;
@@ -145,6 +155,7 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
   const linkTo = (updates: Record<string, string | null>): string => {
     const next = new URLSearchParams(search.toString());
     next.delete("ids");
+    next.delete("groupMinorReleases");
     for (const [key, value] of Object.entries(updates)) value === null || value === "" ? next.delete(key) : next.set(key, value);
     return `${pathname}${next.size ? `?${next.toString()}` : ""}`;
   };
@@ -219,7 +230,7 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
         {health.pendingProjects !== undefined && <p>待整理构成：项目介绍 {health.pendingProjects} 项，版本或文档动态 {health.pendingUpdates ?? 0} 项，已有解读更新 {health.pendingRefresh ?? 0} 项{(health.pendingDeep ?? 0) > 0 ? `（其中深入解读 ${health.pendingDeep} 项）` : ""}。以上是解读任务数，不是新增项目数。</p>}
         <p>{health.generationAt ? `最近生成任务 ${fullDate(health.generationAt)}：${health.generationStatus === "failed" ? "失败" : health.generationStatus === "running" ? "运行中" : health.generationStatus === "partial" ? "部分完成" : "完成"}，生成 ${health.generationGenerated ?? 0} 篇，单项失败 ${health.generationFailed ?? 0} 项。` : "尚无可识别的生成任务记录。"}{health.lastGeneratedAt ? ` 最近解读产出 ${fullDate(health.lastGeneratedAt)}。` : " 尚无解读产出记录。"}</p>
         <p>最近后台任务：新增项目 {health.discovered}，生成解读 {health.generated}，单项失败 {health.failed}。{health.staleRepositories > 0 ? ` ${health.staleRepositories} 个项目等待补同步。` : ""}</p>
-        <details><summary>查看采集范围与更新说明</summary><p>{coverageRows.length ? `最近记录 ${coverageRows.length} 次分页查询。` : "采集范围随后台任务记录。"}分批读取公开项目，不代表全 GitHub 覆盖；小版本可合并展示。{coverage?.updatedAt ? ` 范围记录于 ${fullDate(coverage.updatedAt)}。` : ""}</p>
+        <details><summary>查看采集范围与更新说明</summary><p>{coverageRows.length ? `最近记录 ${coverageRows.length} 次分页查询。` : "采集范围随后台任务记录。"}分批读取公开项目，不代表全 GitHub 覆盖；小版本按 UTC 日期生成版本变化摘要。{coverage?.updatedAt ? ` 范围记录于 ${fullDate(coverage.updatedAt)}。` : ""}</p>
           {coverageRows.length > 0 && <ul>{coverageRows.map((row, index) => <li key={index}>{row.label} · 第 {row.page} 页 · 取得 {row.received} 个候选{row.note ? ` · ${row.note}` : ""}</li>)}</ul>}
           <p>{health.lastSuccessfulGenerationAt ? `最近有实际产出的生成任务完成：${fullDate(health.lastSuccessfulGenerationAt)}。` : "尚无已完成且有实际产出的生成任务记录。"} 单项失败不会隐藏已有内容，暂停的内容需维护者核查后恢复。</p></details>
       </section>}
@@ -240,7 +251,7 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
               key={query.q}
               maxLength={200}
             />
-            {["view", "sort", "language", "minStars", "days", "readState", "contentState", "growthWindow", "groupMinorReleases"].map((name) => search.get(name) ? <input key={name} type="hidden" name={name} value={search.get(name)!} /> : null)}
+            {["view", "sort", "language", "minStars", "days", "readState", "contentState", "growthWindow"].map((name) => search.get(name) ? <input key={name} type="hidden" name={name} value={search.get(name)!} /> : null)}
             <button type="submit">搜索</button>
           </form>
           <label className="sort-control">
@@ -302,7 +313,6 @@ export const Feed = ({ result: initialResult, query, view }: FeedProps): ReactEl
             <span>增长窗口</span>
             <select value={query.growthWindow ?? "7d"} onChange={(event) => choose("growthWindow", event.target.value)}><option value="1d">1 日</option><option value="7d">7 日</option></select>
           </label>
-          {view === "feed" && <label><span>小版本</span><select value={query.groupMinorReleases === false ? "false" : "true"} onChange={(event) => choose("groupMinorReleases", event.target.value)}><option value="true">合并展示</option><option value="false">逐条展示</option></select></label>}
           {(query.q || query.language || query.minStars || query.days || query.contentState || query.readState !== "all") && <Link
             className="reset-filter"
             href={view === "favorites" ? "/?view=favorites" : view === "projects" ? "/?view=projects&sort=stars" : "/"}

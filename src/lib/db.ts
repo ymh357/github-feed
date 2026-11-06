@@ -20,6 +20,10 @@ export const getDb = (): NeonQueryFunction<false, false> => {
 export const queryRows = async (text: string, params: unknown[] = []): Promise<DbRow[]> =>
   await getDb().query(text, params) as DbRow[];
 
+export const LEARNING_EVENT_FILTER = `e.digest_event_id IS NULL AND
+  (e.kind<>'release' OR e.importance<>'minor' OR c.article IS NOT NULL
+    OR (c.status='processing' AND c.lease_until>now()))`;
+
 const dateString = (value: unknown): string => value instanceof Date ? value.toISOString() : String(value);
 const nullableString = (value: unknown): string | null => value === null || value === undefined ? null : String(value);
 
@@ -55,7 +59,10 @@ export const mapCatalogItem = (row: DbRow): CatalogItem => {
     releaseId: nullableString(row.release_id), releaseTag: nullableString(row.release_tag),
     releaseUrl: nullableString(row.release_url), releaseBody: nullableString(row.release_body),
     importance: row.importance === "major" ? "major" : "minor",
-    groupedReleaseCount: Number(row.grouped_release_count ?? 1),
+    groupedReleaseCount: row.kind === "release_digest" && Array.isArray(row.release_entries) ? row.release_entries.length : 1,
+    digestEventId: nullableString(row.digest_event_id),
+    digestDay: typeof row.digest_day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(row.digest_day) ? row.digest_day : null,
+    releaseEntries: (row.release_entries ?? []) as FeedEvent["releaseEntries"],
   };
   const content: LearningContent | null = row.content_id ? {
     id: String(row.content_id), eventId: event.id, status: row.content_status as LearningContent["status"],
@@ -74,7 +81,7 @@ export const mapCatalogItem = (row: DbRow): CatalogItem => {
 };
 
 export const ITEM_SELECT = `r.*, e.id AS event_id, e.kind, e.title AS event_title,
-  e.published_at, e.observed_at, e.release_id, e.release_tag, e.release_url, e.release_body, e.importance,
+  e.published_at, e.observed_at, e.release_id, e.release_tag, e.release_url, e.release_body, e.importance, e.digest_event_id, e.digest_day::text AS digest_day, e.release_entries,
   c.id AS content_id, c.status AS content_status, c.article, c.model, c.generated_at,
   c.input_hash, c.prompt_version, c.input_tokens, c.output_tokens, c.depth, c.requested_depth,
   c.error_summary, c.error_kind, c.attempts, c.next_retry_at,
@@ -84,9 +91,6 @@ export const ITEM_SELECT = `r.*, e.id AS event_id, e.kind, e.title AS event_titl
   COALESCE((SELECT jsonb_agg(jsonb_build_object('id',v.id,'article',v.article,'sources',v.sources,
     'model',v.model,'generatedAt',v.generated_at,'depth',v.depth) ORDER BY v.generated_at DESC)
     FROM content_versions v WHERE v.content_id=c.id), '[]'::jsonb) AS versions,
-  (SELECT count(*) FROM feed_events siblings WHERE e.kind='release' AND e.importance='minor'
-    AND siblings.repository_id=e.repository_id AND siblings.kind='release' AND siblings.importance='minor'
-    AND date_trunc('week',siblings.published_at AT TIME ZONE 'UTC')=date_trunc('week',e.published_at AT TIME ZONE 'UTC')) AS grouped_release_count,
   latest.stars - baseline.stars AS star_growth,
   round(EXTRACT(EPOCH FROM (latest.sampled_at-baseline.sampled_at))/86400.0,4) AS growth_days,
   round(EXTRACT(EPOCH FROM (latest.sampled_at-day_baseline.sampled_at))/86400.0,4) AS growth_1d_days,

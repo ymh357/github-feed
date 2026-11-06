@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { getDb, ITEM_JOINS, ITEM_SELECT, mapCatalogItem, mapRepository, queryRows } from "./db";
+import { reconcileReleaseDigests } from "./release-digests";
+import { getDb, LEARNING_EVENT_FILTER, ITEM_JOINS, ITEM_SELECT, mapCatalogItem, mapRepository, queryRows } from "./db";
 import type { StoreContract } from "./types";
 
 const safeMessage = (message: string): string => message
@@ -88,6 +89,8 @@ export const store: StoreContract = {
       SELECT 'content_' || id, id FROM event ON CONFLICT DO NOTHING`, params);
   },
 
+  reconcileReleaseDigests,
+
   async getRepositoriesToSync(limit) {
     const rows = await queryRows(`SELECT * FROM repositories WHERE is_active = true OR admission_status='candidate'
       ORDER BY COALESCE(last_sync_attempt_at,synced_at) + CASE WHEN pushed_at > now()-interval '14 days' THEN interval '0 hours' ELSE interval '12 hours' END ASC, id ASC LIMIT $1`, [boundedLimit(limit)]);
@@ -107,7 +110,7 @@ export const store: StoreContract = {
       error_kind='transient',error_summary='上次处理意外中断，已达到重试上限。',updated_at=now()
       WHERE status='processing' AND lease_until<now() AND attempts>=3`);
     const rows = await queryRows(`SELECT ${ITEM_SELECT} FROM feed_events e ${ITEM_JOINS}
-      WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000 AND c.attempts<3 AND c.error_kind IS DISTINCT FROM 'source'
+      WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000 AND ${LEARNING_EVENT_FILTER} AND c.attempts<3 AND c.error_kind IS DISTINCT FROM 'source'
       AND (c.next_retry_at IS NULL OR c.next_retry_at<=now())
       AND (c.status IN ('pending','failed','insufficient_sources') OR (c.status='processing' AND c.lease_until<now()))
       AND ($2::text IS NULL OR c.requested_depth=$2) AND ($3::text IS NULL OR lower(r.full_name)=lower($3))
@@ -124,7 +127,8 @@ export const store: StoreContract = {
         AND (next_retry_at IS NULL OR next_retry_at<=now()) AND (status IN ('pending', 'failed', 'insufficient_sources')
         OR (status = 'processing' AND lease_until < now()))
         AND EXISTS (SELECT 1 FROM feed_events e JOIN repositories r ON r.id = e.repository_id
-          WHERE e.id = $1 AND r.is_active = true AND r.admission_status='eligible' AND r.stars>=1000) RETURNING id`, [eventId, token]);
+          WHERE e.id = $1 AND r.is_active = true AND r.admission_status='eligible' AND r.stars>=1000
+            AND e.digest_event_id IS NULL AND (e.kind<>'release' OR e.importance<>'minor' OR learning_contents.article IS NOT NULL)) RETURNING id`, [eventId, token]);
     if (rows.length === 1) ownedLeases.set(eventId, token);
     return rows.length === 1;
   },
@@ -198,6 +202,7 @@ export const store: StoreContract = {
       requested_depth=COALESCE($2::text,c.depth),error_kind=NULL,error_summary=NULL,next_retry_at=NULL,
       refresh_requested_at=now(),updated_at=now() WHERE c.event_id IN (SELECT e.id FROM feed_events e
         JOIN repositories r ON r.id=e.repository_id WHERE lower(r.full_name)=lower($1) AND r.is_active AND r.admission_status='eligible' AND r.stars>=1000
+        AND e.digest_event_id IS NULL AND (e.kind<>'release' OR e.importance<>'minor' OR c.article IS NOT NULL)
         AND ($3::boolean OR e.kind='discovery'))
       AND (c.status<>'processing' OR c.lease_until<now())
       AND (NOT $3::boolean OR c.status IN ('failed','insufficient_sources')) RETURNING id`,
