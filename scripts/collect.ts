@@ -79,10 +79,9 @@ const main = async (): Promise<void> => {
   if (!process.env.DATABASE_URL) throw new Error("缺少 DATABASE_URL，未写入数据。");
   const generate = !has("--discovery-only") && ["all", "generate"].includes(stage);
   const model = process.env.ZERO_G_MODEL?.trim() ?? "";
-  if (generate) { if (!process.env.ZERO_G_API_KEY || !model) throw new Error("缺少 ZERO_G_API_KEY 或 ZERO_G_MODEL。"); await assertModel(model); }
   const deadline = Date.now() + runtime * 1000;
   const result: RunFinish = { status: "completed", discovered: 0, generated: 0, failed: 0 };
-  const runId = await store.startRun({ discoveryScope: JSON.stringify({ stage, depth: depth || "both", repository: repositoryName || null }) });
+  const runId = await store.startRun({ discoveryScope: JSON.stringify({ stage, generatesContent: generate, depth: depth || "both", repository: repositoryName || null }) });
   let stopped = false;
   let infrastructureFailure = false;
   let discoveryDegraded = false;
@@ -104,9 +103,13 @@ const main = async (): Promise<void> => {
     await syncAnnouncement(repository);
   };
   try {
+    if (generate) {
+      if (!process.env.ZERO_G_API_KEY || !model) throw new Error("缺少 ZERO_G_API_KEY 或 ZERO_G_MODEL。");
+      await assertModel(model);
+    }
     if (["all", "discover"].includes(stage) && !repositoryName) {
       const discovery = await discoverRepositories(limit, new Date(), store);
-      await store.setRunScope(runId, JSON.stringify({ stage, ...JSON.parse(discovery.scope) }));
+      await store.setRunScope(runId, JSON.stringify({ ...JSON.parse(discovery.scope), stage, generatesContent: generate }));
       discoveryDegraded = discovery.degraded === true;
       const discoveryInputs = [...discovery.repositories, ...(discovery.candidates ?? [])];
       for (const input of discoveryInputs) {

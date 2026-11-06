@@ -62,13 +62,21 @@ const catalog = (): Promise<ModelInfo[]> => {
   return catalogPromise;
 };
 
-const compatible = (model: ModelInfo): boolean => model.type === "chatbot" && model.formats.includes("openai") && (model.parameters.includes("max_tokens") || model.parameters.includes("max_completion_tokens"));
+const compatible = (model: ModelInfo): boolean => model.type === "chatbot" && model.formats.includes("openai");
+
+export const outputTokenLimit = (parameters: readonly string[], maximum: number): { max_tokens: number } | { max_completion_tokens: number } => {
+  if (!Number.isSafeInteger(maximum) || maximum < 1) throw new Error("模型输出上限必须是正整数。");
+  // Optional catalog metadata is not an exhaustive capability contract; keep the standard output cap on every request.
+  return parameters.includes("max_completion_tokens") && !parameters.includes("max_tokens")
+    ? { max_completion_tokens: maximum }
+    : { max_tokens: maximum };
+};
 
 export const listModels = async (): Promise<string[]> => (await catalog()).filter(compatible).map((model) => model.id);
 
 const getModel = async (id: string): Promise<ModelInfo> => {
   const model = (await catalog()).find((model) => model.id === id);
-  if (!model || !compatible(model)) throw new Error("ZERO_G_MODEL 不在可用的 Chat Completions 文本模型中，或不支持有界输出；请使用 --list-models 查看准确 ID。");
+  if (!model || !compatible(model)) throw new Error("ZERO_G_MODEL 不在可用的 OpenAI Chat Completions 文本模型中；请使用 --list-models 查看准确 ID。");
   return model;
 };
 
@@ -129,7 +137,7 @@ const requestJson = async (model: string, capability: ModelInfo, system: string,
     response = await fetch(`${API_BASE}/chat/completions`, {
       method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey()}` },
       body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: input }],
-        ...(capability.parameters.includes("max_tokens") ? { max_tokens: maximum } : { max_completion_tokens: maximum }),
+        ...outputTokenLimit(capability.parameters, maximum),
         ...(capability.parameters.includes("reasoning_effort") ? { reasoning_effort: effort } : {}),
         ...(capability.parameters.includes("response_format") ? { response_format: { type: "json_object" } } : {}) }),
       signal: AbortSignal.timeout(timeout), redirect: "error",

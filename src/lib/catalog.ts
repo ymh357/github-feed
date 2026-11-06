@@ -10,11 +10,23 @@ const ORDERS: Record<SortKey, string> = {
 const integer = (value: number | undefined, min: number, max: number, fallback: number): number =>
   value !== undefined && Number.isFinite(value) ? Math.min(max, Math.max(min, Math.floor(value))) : fallback;
 
+const publicRunMessage = (value: unknown): string | null => typeof value === "string" ? value
+  .replace(/(?:postgres(?:ql)?:\/\/|https?:\/\/)[^\s]+/gi, "[已隐藏连接地址]")
+  .replace(/\b(?:sk-|mk-|ghp_|gho_)[A-Za-z0-9_-]+/g, "[已隐藏凭据]")
+  .slice(0, 500) : null;
+
 const health = async (): Promise<{ health: CollectionHealth; coverage: NonNullable<CatalogResult["coverage"]> }> => {
-  const [runs, counts, discoveryRuns] = await Promise.all([
+  const [runs, counts, discoveryRuns, generationRuns] = await Promise.all([
     queryRows("SELECT * FROM collection_runs ORDER BY started_at DESC LIMIT 1"),
     queryRows(`SELECT count(*) FILTER (WHERE c.article IS NOT NULL) AS ready,
       count(*) FILTER (WHERE c.status='pending') AS pending,
+      min(c.updated_at) FILTER (WHERE c.status='pending') AS oldest_pending_at,
+      count(*) FILTER (WHERE c.status='pending' AND c.article IS NULL AND e.kind='discovery') AS pending_projects,
+      count(*) FILTER (WHERE c.status='pending' AND c.article IS NULL AND e.kind<>'discovery') AS pending_updates,
+      count(*) FILTER (WHERE c.status='pending' AND c.article IS NOT NULL) AS pending_refresh,
+      count(*) FILTER (WHERE c.status='pending' AND c.article IS NOT NULL AND c.requested_depth='deep') AS pending_deep,
+      max(c.generated_at) AS last_generated_at,
+      (SELECT max(finished_at) FROM collection_runs WHERE status IN ('completed','partial') AND generated>0) AS last_successful_generation_at,
       count(*) FILTER (WHERE c.status='processing') AS processing,
       count(*) FILTER (WHERE c.status IN ('failed','insufficient_sources')) AS failed_contents,
       count(*) FILTER (WHERE c.status IN ('failed','insufficient_sources') AND c.attempts < 3 AND c.error_kind IS DISTINCT FROM 'source') AS retryable,
@@ -25,8 +37,25 @@ const health = async (): Promise<{ health: CollectionHealth; coverage: NonNullab
       FROM learning_contents c JOIN feed_events e ON e.id=c.event_id JOIN repositories r ON r.id=e.repository_id WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000`),
     queryRows(`SELECT discovery_scope,started_at,finished_at FROM collection_runs
       WHERE discovery_scope LIKE '%"queries"%' ORDER BY started_at DESC LIMIT 100`),
+    queryRows(`SELECT status,message,started_at,finished_at,generated,failed,discovery_scope FROM collection_runs
+      WHERE discovery_scope LIKE '%"generate"%' OR discovery_scope LIKE '%"all"%'
+        OR discovery_scope LIKE '%"generatesContent":true%' OR discovery_scope LIKE '%"generatesContent": true%' OR generated>0
+      ORDER BY started_at DESC LIMIT 100`),
   ]);
   const row = runs[0]; const count = counts[0];
+  const generation = generationRuns.find((run) => {
+    try {
+      const scope: unknown = JSON.parse(String(run.discovery_scope));
+      if (!scope || typeof scope !== "object") return Number(run.generated) > 0;
+      const stage = "stage" in scope ? scope.stage : null;
+      const produces = "generatesContent" in scope ? scope.generatesContent : undefined;
+      if (produces === false) return false;
+      return produces === true || stage === "generate" || stage === "all" || Number(run.generated) > 0;
+    } catch { return Number(run.generated) > 0; }
+  });
+  const lastGeneratedAt = count.last_generated_at ? String(count.last_generated_at) : null;
+  const generationReferenceAt = lastGeneratedAt ?? (count.oldest_pending_at ? String(count.oldest_pending_at) : null);
+  const generationStale = Number(count.pending) > 0 && generationReferenceAt !== null && Date.now() - Date.parse(generationReferenceAt) > 30 * 3600_000;
   let coverage: NonNullable<CatalogResult["coverage"]> = { scope: null, updatedAt: null };
   for (const run of discoveryRuns) {
     try {
@@ -41,6 +70,14 @@ const health = async (): Promise<{ health: CollectionHealth; coverage: NonNullab
     lastRunStatus: row ? String(row.status) : null,
     lastRunAt: row ? String(row.finished_at ?? row.started_at) : null,
     discovered: Number(row?.discovered ?? 0), generated: Number(row?.generated ?? 0), failed: Number(row?.failed ?? 0),
+    generationStatus: generation ? String(generation.status) : null,
+    generationMessage: publicRunMessage(generation?.message),
+    generationAt: generation ? String(generation.finished_at ?? generation.started_at) : null,
+    generationGenerated: Number(generation?.generated ?? 0), generationFailed: Number(generation?.failed ?? 0),
+    lastSuccessfulGenerationAt: count.last_successful_generation_at ? String(count.last_successful_generation_at) : null,
+    lastGeneratedAt, generationStale,
+    pendingProjects: Number(count.pending_projects), pendingUpdates: Number(count.pending_updates),
+    pendingRefresh: Number(count.pending_refresh), pendingDeep: Number(count.pending_deep),
     pending: Number(count.pending), processing: Number(count.processing), retryable: Number(count.retryable),
     exhausted: Number(count.exhausted), staleRepositories: Number(count.stale_repositories),
     ready: Number(count.ready), failedContents: Number(count.failed_contents),

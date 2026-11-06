@@ -138,6 +138,18 @@ export interface CollectionHealth {
   failedContents: number;
   lastSuccessfulAt: string | null;
   stale?: boolean;
+  generationStatus?: string | null;
+  generationMessage?: string | null;
+  generationAt?: string | null;
+  generationGenerated?: number;
+  generationFailed?: number;
+  lastSuccessfulGenerationAt?: string | null;
+  lastGeneratedAt?: string | null;
+  generationStale?: boolean;
+  pendingProjects?: number;
+  pendingUpdates?: number;
+  pendingRefresh?: number;
+  pendingDeep?: number;
 }
 
 export interface CatalogResult {
