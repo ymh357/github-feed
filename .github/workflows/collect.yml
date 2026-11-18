@@ -27,13 +27,19 @@ on:
         description: "各阶段处理上限（1..200），不限制阅览"
         type: string
         default: "50"
+      continuation_depth:
+        description: "自动续跑链深度（0..11），达到边界后停止"
+        type: string
+        default: "0"
 
 permissions:
   contents: read
+  actions: write
 
 concurrency:
   group: github-feed-collection
   cancel-in-progress: false
+  queue: max
 
 jobs:
   collect:
@@ -50,6 +56,7 @@ jobs:
       REQUESTED_DEPTH: ${{ inputs.depth || 'both' }}
       REQUESTED_REPOSITORY: ${{ inputs.repository || '' }}
       EVENT_NAME: ${{ github.event_name }}
+      CONTINUATION_DEPTH: ${{ inputs.continuation_depth || '0' }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
@@ -72,3 +79,8 @@ jobs:
             if [[ -n "$REQUESTED_REPOSITORY" ]]; then arguments+=(--repository "$REQUESTED_REPOSITORY"); fi
           fi
           node --env-file-if-exists=.env.local --import tsx scripts/scheduled-collect.ts "${arguments[@]}"
+      - name: 首发积压有界续跑
+        if: ${{ success() }}
+        env:
+          SOURCE_JOB_SUCCEEDED: "true"
+        run: node --env-file-if-exists=.env.local --import tsx scripts/continue-collection.ts

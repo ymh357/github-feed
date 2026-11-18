@@ -155,6 +155,7 @@ export interface CollectionHealth {
   generationMessage?: string | null;
   generationAt?: string | null;
   generationGenerated?: number;
+  generationFirstPublications?: number | null;
   generationFailed?: number;
   lastSuccessfulGenerationAt?: string | null;
   lastGeneratedAt?: string | null;

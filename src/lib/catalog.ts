@@ -61,6 +61,14 @@ const health = async (): Promise<{ health: CollectionHealth; coverage: NonNullab
       return produces === true || stage === "generate" || stage === "all" || Number(run.generated) > 0;
     } catch { return Number(run.generated) > 0; }
   });
+  let generationFirstPublications: number | null = null;
+  if (generation && generation.status !== "running") {
+    try {
+      const scope: unknown = JSON.parse(String(generation.discovery_scope));
+      const first = scope && typeof scope === "object" && "generatedFirstPublications" in scope ? scope.generatedFirstPublications : null;
+      if (typeof first === "number" && Number.isSafeInteger(first) && first >= 0 && first <= Number(generation.generated)) generationFirstPublications = first;
+    } catch { /* Historical runs do not have an exact first-publication counter. */ }
+  }
   const lastGeneratedAt = count.last_generated_at ? String(count.last_generated_at) : null;
   const generationReferenceAt = lastGeneratedAt ?? (count.oldest_pending_at ? String(count.oldest_pending_at) : null);
   const generationStale = Number(count.pending) > 0 && generationReferenceAt !== null && Date.now() - Date.parse(generationReferenceAt) > 30 * 3600_000;
@@ -81,7 +89,7 @@ const health = async (): Promise<{ health: CollectionHealth; coverage: NonNullab
     generationStatus: generation ? String(generation.status) : null,
     generationMessage: publicRunMessage(generation?.message),
     generationAt: generation ? String(generation.finished_at ?? generation.started_at) : null,
-    generationGenerated: Number(generation?.generated ?? 0), generationFailed: Number(generation?.failed ?? 0),
+    generationGenerated: Number(generation?.generated ?? 0), generationFailed: Number(generation?.failed ?? 0), generationFirstPublications,
     lastSuccessfulGenerationAt: count.last_successful_generation_at ? String(count.last_successful_generation_at) : null,
     lastGeneratedAt, generationStale,
     pendingProjects: Number(count.pending_projects), pendingUpdates: Number(count.pending_updates),

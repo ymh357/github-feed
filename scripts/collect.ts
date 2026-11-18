@@ -87,11 +87,19 @@ const main = async (): Promise<void> => {
   const model = process.env.ZERO_G_MODEL?.trim() ?? "";
   const deadline = Date.now() + runtime * 1000;
   const result: RunFinish = { status: "completed", discovered: 0, generated: 0, failed: 0 };
-  const runId = await store.startRun({ discoveryScope: JSON.stringify({ stage, generatesContent: generate, depth: depth || "both", repository: repositoryName || null }) });
+  let runScope: Record<string, unknown> = { stage, generatesContent: generate, depth: depth || "both", repository: repositoryName || null,
+    githubRunId: process.env.GITHUB_RUN_ID ?? null, githubRunAttempt: process.env.GITHUB_RUN_ATTEMPT ?? "1",
+    generatedFirstPublications: 0, infrastructureFailure: false };
+  const runId = await store.startRun({ discoveryScope: JSON.stringify(runScope) });
   let stopped = false;
   let infrastructureFailure = false;
   let discoveryDegraded = false;
   let releaseBackfillPending = false;
+  let generatedFirstPublications = 0;
+  const saveRunScope = async (): Promise<void> => {
+    runScope = { ...runScope, generatedFirstPublications, infrastructureFailure };
+    await store.setRunScope(runId, JSON.stringify(runScope));
+  };
   const handled = new Set<string>();
   const discoveryMetadataIds = new Set<string>();
   const recordFailure = (error: unknown, name: string): void => {
@@ -119,7 +127,8 @@ const main = async (): Promise<void> => {
     }
     if (["all", "discover"].includes(stage) && !repositoryName) {
       const discovery = await discoverRepositories(limit, new Date(), store);
-      await store.setRunScope(runId, JSON.stringify({ ...JSON.parse(discovery.scope), stage, generatesContent: generate }));
+      runScope = { ...runScope, ...JSON.parse(discovery.scope), stage, generatesContent: generate };
+      await saveRunScope();
       discoveryDegraded = discovery.degraded === true;
       const discoveryInputs = [...discovery.repositories, ...(discovery.candidates ?? [])];
       for (const input of discoveryInputs) {
@@ -204,6 +213,7 @@ const main = async (): Promise<void> => {
           }
           await store.saveContent(content);
           result.generated += 1;
+          if (!item.content?.article) generatedFirstPublications += 1;
           console.log(`${item.repository.fullName}：解读与事实复核完成`);
         }
       };
@@ -211,13 +221,14 @@ const main = async (): Promise<void> => {
     }
     result.status = stopped || result.failed > 0 || discoveryDegraded || releaseBackfillPending ? "partial" : "completed";
     result.message = [result.message, stopped ? "达到有界运行预算或基础限流，队列保留供后续续跑。" : "本次阶段已结束。", releaseBackfillPending ? "部分仓库版本历史分批补采，后续续跑。" : "", result.failed ? `${result.failed} 项内容未完成，详情见失败状态。` : ""].filter(Boolean).join(" ");
+    await saveRunScope();
     await store.finishRun(runId, result);
     console.log(JSON.stringify({ runId, ...result }));
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `### 采集结果：${result.status}\n\n阶段：${stage}；新增 ${result.discovered}；生成 ${result.generated}；失败 ${result.failed}。\n\n${result.message}\n`);
     if (infrastructureFailure) process.exitCode = 1;
   } catch (error) {
     result.status = "failed"; result.message = safeError(error);
-    try { await store.finishRun(runId, result); } catch { /* Preserve the original failure without logging secrets. */ }
+    try { await saveRunScope(); await store.finishRun(runId, result); } catch { /* Preserve the original failure without logging secrets. */ }
     throw error;
   }
 };
