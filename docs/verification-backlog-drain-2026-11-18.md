@@ -26,4 +26,10 @@
 
 ## 云端与页面验收
 
-最终部署、首次发布统计、自动后继run以及浏览器不手动刷新增长的结果，在实际观察后追加。
+- 旧头真实批量44297470668结束：generated53、failed1、partial（达到有界预算），可读216→269。没有用恢复入队或前端加数代替发布。
+- 新头0dbd33b实际run [44299903702](https://github.com/ymh357/github-feed/actions/runs/44299903702)：业务250e8e48-dc5d-4175-9e3c-9420971a5dad，completed、generated4、failed0、generatedFirstPublications4、infrastructureFailure=false；精确githubRunId和attempt1已入库。
+- 该run的continuation检查实际输出matchedRuns1、firstPublications4、claimable227、proceed=true、nextDepth1，单次请求下一批。真实自动后继[44300106552](https://github.com/ymh357/github-feed/actions/runs/44300106552)由github-actions[bot]创建，已in_progress并持续实际发布；不是根代理再次手动触发。
+- 生产部署dpl_FmQzFGFje1BuskGr8AtFAB6iMfTn READY并绑定正式域名；本地及远端构建、类型、ESLint、独立复审通过。workflow的queue:max与actions:write已由真实新run成功接受。
+- 实际IAB用户标签页：初读207；仅reload一次载入新版后269、visibility=visible；之后没有再reload/导航，第二次读到274且显示“正在生成学习解读”，证明30秒轮询真实更新。运行中的生成/失败计数隐藏，顶层可读数实时展示。
+- 同期服务端API又确认ready275、processing2，与持续产出一致；后继仍在运行，不把未完成积压写成已清空。旧scope无精确首发计数保持null，新结束run才显示首发计数。
+- 后继链仍受12job边界、claimable队列、基础故障和零首发停止条件保护；如果派生触发丢失，下次实际cron唤醒会因首发积压即时到期，不再等3小时。
