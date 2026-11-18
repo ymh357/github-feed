@@ -3,7 +3,9 @@ import { assertModel, generateLearning, ZeroGInfrastructureError } from "../src/
 import { discoverRepositories, getReleases, getRepository, getCommit, getTree, getFile, githubJson, repositoryPath, GitHubError } from "../src/lib/github";
 import { collectSources, InsufficientSourcesError, selectSections } from "../src/lib/sources";
 import { store } from "../src/lib/store";
+import { LEARNING_EVENT_FILTER, queryRows } from "../src/lib/db";
 import { FORMAL_STAR_FLOOR, isFormalRepository } from "../src/lib/discovery-policy";
+import { bootstrapReleaseHistory, type ReleaseBackfillResult } from "../src/lib/release-backfill";
 import type { ContentDepth, GitHubRepositoryInput, Repository, RunFinish } from "../src/lib/types";
 
 const options = process.argv.slice(2);
@@ -34,17 +36,21 @@ const safeError = (error: unknown): string => {
   return "任务失败，请检查网络、服务端配置与数据库状态。";
 };
 
-const syncReleases = async (repository: Repository, isNew: boolean): Promise<void> => {
-  const window = await getReleases(repository.fullName, repository.lastReleaseId, isNew ? 1 : 3);
-  if (!isNew && !window.complete) throw new Error("GitHub 版本窗口超过 300 条，尚未覆盖基线；需补采。");
+const syncReleases = async (repository: Repository, isNew: boolean): Promise<ReleaseBackfillResult> => {
+  if (!isNew && !repository.lastReleaseId) return bootstrapReleaseHistory(repository);
+  const window = await getReleases(repository.fullName, repository.lastReleaseId, isNew ? 1 : 3, isNew);
   const releases = window.releases;
-  if (!releases.length) return;
-  if (isNew) { await store.recordRelease(repository.id, releases[0], true); return; }
-  const baseline = repository.lastReleaseId ? releases.findIndex((release) => release.id === repository.lastReleaseId) : -1;
-  if (repository.lastReleaseId && baseline === -1) throw new Error("GitHub 上次正式版本基线已不可见；需人工核验。");
-  const newer = baseline >= 0 ? releases.slice(0, baseline) : releases.filter((release) => Date.parse(release.publishedAt) > Date.parse(repository.discoveredAt));
+  if (isNew) {
+    if (releases.length) await store.recordRelease(repository.id, releases[0], true);
+    else if (!window.complete) return bootstrapReleaseHistory(repository, { initialOffset: window.nextOffset });
+    return { complete: true, nextOffset: window.nextOffset, recordedReleases: 0 };
+  }
+  if (!window.complete) throw new Error("GitHub 版本窗口超过 300 条，尚未覆盖正式版本基线；需补采。");
+  const baseline = releases.findIndex((release) => release.id === repository.lastReleaseId);
+  if (baseline === -1) throw new Error("GitHub 上次正式版本基线已不可见；需人工核验。");
+  const newer = releases.slice(0, baseline);
   for (const release of newer.reverse()) await store.recordRelease(repository.id, release, false);
-  if (!repository.lastReleaseId && !newer.length) await store.recordRelease(repository.id, releases[0], true);
+  return { complete: true, nextOffset: window.nextOffset, recordedReleases: newer.length };
 };
 
 const syncAnnouncement = async (repository: Repository): Promise<void> => {
@@ -85,6 +91,7 @@ const main = async (): Promise<void> => {
   let stopped = false;
   let infrastructureFailure = false;
   let discoveryDegraded = false;
+  let releaseBackfillPending = false;
   const handled = new Set<string>();
   const discoveryMetadataIds = new Set<string>();
   const recordFailure = (error: unknown, name: string): void => {
@@ -99,8 +106,11 @@ const main = async (): Promise<void> => {
     await store.recordSnapshot(repository.id, repository.stars);
     discoveryMetadataIds.add(input.id);
     if (isNew) result.discovered += 1;
-    await syncReleases(repository, isNew);
-    await syncAnnouncement(repository);
+    const releaseProgress = await syncReleases(repository, isNew);
+    if (!releaseProgress.complete) {
+      releaseBackfillPending = true;
+      console.warn(`${repository.fullName}：版本历史分批补采，后续续跑。${releaseProgress.busy ? "其他任务正持有续采租约。" : `已确认原始记录偏移 ${releaseProgress.nextOffset}。`}`);
+    } else await syncAnnouncement(repository);
   };
   try {
     if (generate) {
@@ -141,9 +151,20 @@ const main = async (): Promise<void> => {
       if (digests > 0) console.log(`已合并小版本变化，新增 ${digests} 个摘要任务。`);
     }
     if (generate && !stopped) {
-      if (!repositoryName) await store.queueRefresh(Math.min(limit, 5));
-      if (!depth && !repositoryName) for (const repository of await store.getDeepCandidates(2)) await store.resetContent(repository.fullName, { depth: "deep" });
-      const events = await store.getPendingEvents(limit, { ...(depth ? { depth } : {}), ...(repositoryName ? { repository: repositoryName } : {}) });
+      const selection = { ...(depth ? { depth } : {}), ...(repositoryName ? { repository: repositoryName } : {}) };
+      let events = await store.getPendingEvents(limit, selection);
+      if (!events.length && !repositoryName) {
+        const unfinished = await queryRows(`SELECT EXISTS(SELECT 1 FROM learning_contents c
+          JOIN feed_events e ON e.id=c.event_id JOIN repositories r ON r.id=e.repository_id
+          WHERE r.is_active AND r.admission_status='eligible' AND r.stars>=1000 AND ${LEARNING_EVENT_FILTER}
+          AND c.article IS NULL AND c.attempts<3 AND c.error_kind IS DISTINCT FROM 'source'
+          AND c.status IN ('pending','processing','failed','insufficient_sources')) AS waiting`);
+        if (!unfinished[0].waiting) {
+          await store.queueRefresh(Math.min(limit, 5));
+          if (!depth) for (const repository of await store.getDeepCandidates(2)) await store.resetContent(repository.fullName, { depth: "deep" });
+          events = await store.getPendingEvents(limit, selection);
+        }
+      }
       let next = 0;
       const worker = async (): Promise<void> => {
         while (next < events.length && !stopped) {
@@ -188,8 +209,8 @@ const main = async (): Promise<void> => {
       };
       await Promise.all([worker(), worker()]);
     }
-    result.status = stopped || result.failed > 0 || discoveryDegraded ? "partial" : "completed";
-    result.message = [result.message, stopped ? "达到有界运行预算或基础限流，队列保留供后续续跑。" : "本次阶段已结束。", result.failed ? `${result.failed} 项内容未完成，详情见失败状态。` : ""].filter(Boolean).join(" ");
+    result.status = stopped || result.failed > 0 || discoveryDegraded || releaseBackfillPending ? "partial" : "completed";
+    result.message = [result.message, stopped ? "达到有界运行预算或基础限流，队列保留供后续续跑。" : "本次阶段已结束。", releaseBackfillPending ? "部分仓库版本历史分批补采，后续续跑。" : "", result.failed ? `${result.failed} 项内容未完成，详情见失败状态。` : ""].filter(Boolean).join(" ");
     await store.finishRun(runId, result);
     console.log(JSON.stringify({ runId, ...result }));
     if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `### 采集结果：${result.status}\n\n阶段：${stage}；新增 ${result.discovered}；生成 ${result.generated}；失败 ${result.failed}。\n\n${result.message}\n`);

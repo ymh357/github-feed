@@ -246,7 +246,7 @@ export interface StoreContract {
   finishRun(id: string, result: RunFinish): Promise<void>;
   upsertRepository(input: GitHubRepositoryInput): Promise<{ repository: Repository; isNew: boolean }>;
   recordSnapshot(repositoryId: string, stars: number): Promise<void>;
-  recordRelease(repositoryId: string, release: ReleaseInput, baseline: boolean): Promise<void>;
+  recordRelease(repositoryId: string, release: ReleaseInput, baseline: boolean, options?: { advanceBaseline?: boolean }): Promise<void>;
   reconcileReleaseDigests(): Promise<number>;
   getRepositoriesToSync(limit: number): Promise<Repository[]>;
   recordSyncAttempt(repositoryId: string): Promise<void>;

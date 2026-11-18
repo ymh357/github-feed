@@ -3,6 +3,10 @@ import { admissionReason, FORMAL_STAR_FLOOR, getTrendingNames, isFormalRepositor
 
 type JsonRecord = Record<string, unknown>;
 
+class GitHubResponseSizeError extends Error {
+  constructor() { super("GitHub 响应超过安全大小限制。"); }
+}
+
 export class GitHubError extends Error {
   constructor(public readonly status: number, public readonly retryAfterSeconds: number | null = null) {
     super(status === 403 || status === 429 ? "GitHub 请求受到限流，请稍后续跑。" : `GitHub 请求失败（HTTP ${status}）。`);
@@ -59,7 +63,7 @@ export const githubJson = async (path: string): Promise<unknown> => {
         const part = await reader.read().catch(() => { throw new GitHubError(503); });
         if (part.done) break;
         size += part.value.byteLength;
-        if (size > 4_000_000) { await reader.cancel(); throw new Error("GitHub 响应超过安全大小限制。"); }
+        if (size > 4_000_000) { await reader.cancel(); throw new GitHubResponseSizeError(); }
         chunks.push(part.value);
       }
       const body = Buffer.concat(chunks).toString("utf8");
@@ -226,22 +230,37 @@ export const getRepository = async (fullName: string, repositoryId?: string): Pr
   return parseRepository(await githubJson(repositoryId ? `/repositories/${repositoryId}` : repositoryPath(fullName)));
 };
 
-export interface ReleaseWindow { releases: ReleaseInput[]; complete: boolean; pages: number }
+export interface ReleaseWindow { releases: ReleaseInput[]; complete: boolean; pages: number; rawCount: number; nextOffset: number }
 
-export const getReleases = async (fullName: string, baselineId: string | null = null, maxPages: number = 3): Promise<ReleaseWindow> => {
+export const getReleases = async (fullName: string, baselineId: string | null = null, maxPages: number = 3, latestOnly: boolean = false, startOffset: number = 0): Promise<ReleaseWindow> => {
+  if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 3) throw new Error("GitHub 版本窗口必须为 1 至 3 个百条记录批次。");
+  if (!Number.isSafeInteger(startOffset) || startOffset < 0 || startOffset > Number.MAX_SAFE_INTEGER - 300) throw new Error("GitHub 版本续采偏移无效。");
   const rows: JsonRecord[] = [];
+  const maximumRecords = latestOnly ? 300 : maxPages * 100;
+  const isFormal = (release: JsonRecord): boolean => release.draft === false && release.prerelease === false && typeof release.published_at === "string";
+  let pageSize = latestOnly || startOffset % 5 !== 0 ? 1 : startOffset % 10 === 0 ? 10 : 5;
   let complete = false;
   let pages = 0;
-  for (let page = 1; page <= maxPages; page += 1) {
-    const raw = await githubJson(`${repositoryPath(fullName)}/releases?per_page=100&page=${page}`);
-    if (!Array.isArray(raw)) throw new Error("GitHub 版本列表无效。");
+  while (rows.length < maximumRecords && pages < maximumRecords + 2) {
+    const page = (startOffset + rows.length) / pageSize + 1;
+    let raw: unknown;
+    pages += 1;
+    try {
+      raw = await githubJson(`${repositoryPath(fullName)}/releases?per_page=${pageSize}&page=${page}`);
+    } catch (error) {
+      if (!(error instanceof GitHubResponseSizeError) || pageSize === 1) throw error;
+      // Divisors of ten preserve the exact raw offset when retrying a smaller page.
+      pageSize = pageSize === 10 ? 5 : 1;
+      continue;
+    }
+    if (!Array.isArray(raw) || raw.length > pageSize) throw new Error("GitHub 版本列表无效。");
     const records = raw.map(record);
     rows.push(...records);
-    pages += 1;
-    complete = raw.length < 100 || (baselineId !== null && records.some((release) => String(release.id) === baselineId));
+    complete = raw.length < pageSize || (!latestOnly && baselineId !== null && records.some((release) => String(release.id) === baselineId))
+      || (latestOnly && records.some(isFormal));
     if (complete) break;
   }
-  const releases = rows.filter((release) => release.draft === false && release.prerelease === false && typeof release.published_at === "string")
+  const releases = rows.filter(isFormal)
     .map((release) => ({
       id: String(integer(release.id, "release.id")),
       tag: string(release.tag_name, "tag_name"),
@@ -250,7 +269,7 @@ export const getReleases = async (fullName: string, baselineId: string | null = 
       url: `https://github.com/${fullName}/releases/tag/${encodeURIComponent(string(release.tag_name, "tag_name"))}`,
       publishedAt: string(release.published_at, "published_at"),
     })).sort((a, b) => Date.parse(b.publishedAt) - Date.parse(a.publishedAt));
-  return { releases, complete, pages };
+  return { releases, complete, pages, rawCount: rows.length, nextOffset: startOffset + rows.length };
 };
 
 export const getCommit = async (fullName: string, ref: string): Promise<string> => {

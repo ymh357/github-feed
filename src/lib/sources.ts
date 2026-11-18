@@ -40,8 +40,8 @@ export const collectSources = async (item: CatalogItem, depth: ContentDepth = "q
   try { tree = [...root, ...await getTree(repository.fullName, revision, true)].filter((entry, index, entries) => entries.findIndex((other) => other.path === entry.path) === index); } catch (error) {
     if (error instanceof GitHubError && ([403, 429].includes(error.status) || error.status >= 500)) throw error;
   }
-  const readmePattern = /(?:^|\/)(?:readme(?:[._-](?:en|zh(?:[._-](?:cn|tw))?|english|chinese))?|index)\.(?:md|rst|txt|markdown|mdx)$/i;
-  const readme = root.find((entry) => entry.type === "blob" && /^readme(?:\.(?:md|rst|txt|markdown))?$/i.test(entry.path))
+  const readmePattern = /(?:^|\/)(?:readme(?:[._-](?:en|zh(?:[._-](?:cn|tw))?|english|chinese))?|index)\.(?:md|rst|txt|markdown|mdx|asciidoc|adoc)$/i;
+  const readme = root.find((entry) => entry.type === "blob" && /^readme(?:\.(?:md|rst|txt|markdown|mdx|asciidoc|adoc))?$/i.test(entry.path))
     ?? tree.find((entry) => entry.type === "blob" && readmePattern.test(entry.path) && entry.path.split("/").length <= 3);
   if (!readme) throw new InsufficientSourcesError("README 或文档入口缺失，无法建立可靠项目介绍。");
   const fetchedAt = new Date().toISOString();
@@ -79,7 +79,7 @@ export const collectSources = async (item: CatalogItem, depth: ContentDepth = "q
   const excluded = /(?:^|\/)(?:node_modules|vendor|dist|build|\.git|test|tests|fixtures|examples)(?:\/|$)|(?:lock|\.min)\./i;
   const code = tree.filter((entry) => entry.type === "blob" && !excluded.test(entry.path) && (entry.size ?? Infinity) <= 100_000 && /\.(?:tsx?|jsx?|py|go|rs|java|kt|swift|c|cpp|h)$|(?:^|\/)(?:package\.json|pyproject\.toml|cargo\.toml|go\.mod)$/i.test(entry.path));
   const rank = (path: string): number => (/architecture|design|getting.started|quickstart|usage|install/i.test(path) ? 0 : /(?:^|\/)(?:main|index|app|lib|__init__|server|router|agent)\./i.test(path) ? 1 : /package\.json|pyproject|cargo\.toml|go\.mod/i.test(path) ? 2 : 3) + path.split("/").length / 10;
-  const docs = tree.filter((entry) => entry.type === "blob" && entry.path !== readme.path && !excluded.test(entry.path) && /^(?:docs?|documentation)\/.*\.(?:md|mdx|rst|txt)$/i.test(entry.path));
+  const docs = tree.filter((entry) => entry.type === "blob" && entry.path !== readme.path && !excluded.test(entry.path) && /^(?:docs?|documentation)\/.*\.(?:md|mdx|rst|txt|markdown|asciidoc|adoc)$/i.test(entry.path));
   const candidates = [...docs.sort((a, b) => rank(a.path) - rank(b.path)).slice(0, depth === "deep" ? 3 : 1).map((entry) => ({ ...entry, kind: "docs" as const })),
     ...code.sort((a, b) => rank(a.path) - rank(b.path)).slice(0, depth === "deep" ? 6 : 3).map((entry) => ({ ...entry, kind: "source" as const }))];
   for (const entry of candidates) {

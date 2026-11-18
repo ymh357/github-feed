@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { PROMPT_VERSION } from "./ai";
 import { reconcileReleaseDigests } from "./release-digests";
 import { getDb, LEARNING_EVENT_FILTER, ITEM_JOINS, ITEM_SELECT, mapCatalogItem, mapRepository, queryRows } from "./db";
 import type { StoreContract } from "./types";
@@ -68,10 +69,10 @@ export const store: StoreContract = {
       ON CONFLICT (repository_id, sample_day) DO NOTHING`, [repositoryId, stars]);
   },
 
-  async recordRelease(repositoryId, release, baseline) {
+  async recordRelease(repositoryId, release, baseline, options = {}) {
     const params = [repositoryId, release.id, release.publishedAt, release.tag, release.title,
       release.body.slice(0, 100000), release.url, `release_${repositoryId}_${release.id}`,
-      /(?:breaking|security|重大|安全)/i.test(release.title + " " + release.body) || /^v?\d+\.0\.0(?:$|[-+])/i.test(release.tag) ? "major" : "minor"];
+      /(?:breaking|security|重大|安全)/i.test(release.title + " " + release.body) || /^v?\d+\.0\.0(?:$|[-+])/i.test(release.tag) ? "major" : "minor", options.advanceBaseline !== false];
     if (baseline) {
       await queryRows(`UPDATE repositories SET last_release_id = $2, last_release_published_at = $3
         WHERE id = $1 AND last_release_id IS NULL`, params.slice(0, 3));
@@ -79,7 +80,7 @@ export const store: StoreContract = {
     }
     await queryRows(`WITH updated AS (
       UPDATE repositories SET last_release_id = $2, last_release_published_at = $3
-      WHERE id = $1 AND (last_release_published_at IS NULL OR last_release_published_at <= $3::timestamptz)
+      WHERE id = $1 AND $10::boolean AND (last_release_published_at IS NULL OR last_release_published_at <= $3::timestamptz)
       RETURNING id
     ), event AS (
       INSERT INTO feed_events (id, repository_id, kind, title, published_at, release_id, release_tag, release_body, release_url, importance)
@@ -114,7 +115,8 @@ export const store: StoreContract = {
       AND (c.next_retry_at IS NULL OR c.next_retry_at<=now())
       AND (c.status IN ('pending','failed','insufficient_sources') OR (c.status='processing' AND c.lease_until<now()))
       AND ($2::text IS NULL OR c.requested_depth=$2) AND ($3::text IS NULL OR lower(r.full_name)=lower($3))
-      ORDER BY row_number() OVER (PARTITION BY (c.attempts>0) ORDER BY c.updated_at,e.id),
+      ORDER BY (c.article IS NOT NULL),
+        row_number() OVER (PARTITION BY (c.article IS NOT NULL),(c.attempts>0) ORDER BY c.updated_at,e.id),
         (c.attempts>0) DESC,e.id LIMIT $1`, [boundedLimit(limit), options.depth ?? null, options.repository ?? null]);
     return rows.map(mapCatalogItem);
   },
@@ -122,13 +124,14 @@ export const store: StoreContract = {
   async claimEvent(eventId) {
     const token = randomUUID();
     const rows = await queryRows(`UPDATE learning_contents SET status = 'processing', attempts = attempts + 1,
-      lease_until = now() + interval '20 minutes', lease_token = $2, updated_at = now(), error_summary = NULL
+      lease_until = now() + interval '20 minutes', lease_token = $2, updated_at = now(), error_summary = NULL,
+      last_attempt_revision=$3
       WHERE event_id = $1 AND attempts < 3 AND error_kind IS DISTINCT FROM 'source'
         AND (next_retry_at IS NULL OR next_retry_at<=now()) AND (status IN ('pending', 'failed', 'insufficient_sources')
         OR (status = 'processing' AND lease_until < now()))
         AND EXISTS (SELECT 1 FROM feed_events e JOIN repositories r ON r.id = e.repository_id
           WHERE e.id = $1 AND r.is_active = true AND r.admission_status='eligible' AND r.stars>=1000
-            AND e.digest_event_id IS NULL AND (e.kind<>'release' OR e.importance<>'minor' OR learning_contents.article IS NOT NULL)) RETURNING id`, [eventId, token]);
+            AND e.digest_event_id IS NULL AND (e.kind<>'release' OR e.importance<>'minor' OR learning_contents.article IS NOT NULL)) RETURNING id`, [eventId, token, PROMPT_VERSION]);
     if (rows.length === 1) ownedLeases.set(eventId, token);
     return rows.length === 1;
   },

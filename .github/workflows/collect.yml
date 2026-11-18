@@ -2,9 +2,7 @@ name: 每日项目学习更新
 
 on:
   schedule:
-    - cron: "23 22 * * *"
-    - cron: "17 */6 * * *"
-    - cron: "43 */3 * * *"
+    - cron: "23 * * * *"
   workflow_dispatch:
     inputs:
       stage:
@@ -34,7 +32,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: github-feed-${{ github.event.schedule || inputs.stage || 'all' }}
+  group: github-feed-collection
   cancel-in-progress: false
 
 jobs:
@@ -46,13 +44,12 @@ jobs:
       ZERO_G_API_KEY: ${{ secrets.ZERO_G_API_KEY }}
       ZERO_G_MODEL: ${{ secrets.ZERO_G_MODEL }}
       GITHUB_TOKEN: ${{ github.token }}
-      COLLECTION_RUNTIME_SECONDS: "1200"
       COLLECTION_LIMIT: ${{ inputs.limit || '50' }}
       DISCOVERY_ONLY: ${{ inputs.discovery_only || 'false' }}
       REQUESTED_STAGE: ${{ inputs.stage || 'all' }}
       REQUESTED_DEPTH: ${{ inputs.depth || 'both' }}
       REQUESTED_REPOSITORY: ${{ inputs.repository || '' }}
-      EVENT_SCHEDULE: ${{ github.event.schedule || '' }}
+      EVENT_NAME: ${{ github.event_name }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-node@v7.1.0
@@ -62,17 +59,16 @@ jobs:
       - run: npm ci
       - name: 初始化数据库
         run: npm run db:migrate
-      - name: 执行独立采集阶段
+      - name: 检查到期阶段并追赶
         shell: bash
         run: |
-          stage="$REQUESTED_STAGE"
-          case "$EVENT_SCHEDULE" in
-            '23 22 * * *') stage=discover ;;
-            '17 */6 * * *') stage=sync ;;
-            '43 */3 * * *') stage=generate ;;
-          esac
-          arguments=(--stage "$stage" --limit "$COLLECTION_LIMIT")
-          if [[ "$DISCOVERY_ONLY" == "true" ]]; then arguments+=(--discovery-only); fi
-          if [[ "$REQUESTED_DEPTH" != "both" ]]; then arguments+=(--depth "$REQUESTED_DEPTH"); fi
-          if [[ -n "$REQUESTED_REPOSITORY" ]]; then arguments+=(--repository "$REQUESTED_REPOSITORY"); fi
-          npm run collect -- "${arguments[@]}"
+          arguments=(--limit "$COLLECTION_LIMIT")
+          if [[ "$EVENT_NAME" == "schedule" ]]; then
+            arguments+=(--scheduled)
+          else
+            arguments+=(--stage "$REQUESTED_STAGE")
+            if [[ "$DISCOVERY_ONLY" == "true" ]]; then arguments+=(--discovery-only); fi
+            if [[ "$REQUESTED_DEPTH" != "both" ]]; then arguments+=(--depth "$REQUESTED_DEPTH"); fi
+            if [[ -n "$REQUESTED_REPOSITORY" ]]; then arguments+=(--repository "$REQUESTED_REPOSITORY"); fi
+          fi
+          node --env-file-if-exists=.env.local --import tsx scripts/scheduled-collect.ts "${arguments[@]}"

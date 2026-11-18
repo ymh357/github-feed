@@ -141,3 +141,33 @@ ALTER TABLE feed_events ADD COLUMN IF NOT EXISTS digest_day date;
 ALTER TABLE feed_events ADD COLUMN IF NOT EXISTS release_entries jsonb NOT NULL DEFAULT '[]';
 CREATE INDEX IF NOT EXISTS feed_events_digest_member_idx ON feed_events(digest_event_id) WHERE digest_event_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS feed_events_digest_day_idx ON feed_events(repository_id,digest_day) WHERE kind='release_digest';
+
+CREATE TABLE IF NOT EXISTS collection_stage_leases (
+  stage text PRIMARY KEY,
+  lease_token text NOT NULL,
+  lease_until timestamptz NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS content_recoveries (
+  id bigserial PRIMARY KEY,
+  content_id text NOT NULL REFERENCES learning_contents(id),
+  repair_revision text NOT NULL,
+  previous_status text NOT NULL,
+  previous_attempts integer NOT NULL,
+  previous_error_kind text,
+  previous_error_summary text,
+  previous_next_retry_at timestamptz,
+  previous_updated_at timestamptz NOT NULL,
+  recovered_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (content_id, repair_revision)
+);
+
+ALTER TABLE learning_contents ADD COLUMN IF NOT EXISTS last_attempt_revision text;
+ALTER TABLE content_recoveries ADD COLUMN IF NOT EXISTS previous_attempt_revision text;
+
+CREATE TABLE IF NOT EXISTS release_backfills (
+  repository_id text PRIMARY KEY REFERENCES repositories(id) ON DELETE CASCADE,
+  next_offset integer NOT NULL DEFAULT 0 CHECK (next_offset >= 0),
+  anchor_release jsonb,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
