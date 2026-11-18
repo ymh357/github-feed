@@ -26,7 +26,7 @@
 - [x] Root: additive lease/recovery schema; prioritize first publication over existing-article refresh; avoid enqueuing more automatic deep/refresh work when the learning queue already has work.
 - [x] Root: versioned recovery CLI with dry-run and durable old-state records, applied only after real repaired generation succeeds.
 - [x] Review: race handling, retry idempotency, call/time budgets, audit boundaries and credential handling.
-- [ ] Validate migrations twice, dry-run scheduler, scope of recovery, true release/digest publication, full required checks and production deployment.
+- [x] Validate migrations twice, dry-run scheduler, scope of recovery, true release/digest publication, full required checks and production deployment.
 
 ## Ownership
 

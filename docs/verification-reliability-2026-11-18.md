@@ -34,4 +34,12 @@
 
 ## 发布核验
 
-生产部署、云端新管线和四个大响应仓库的最终续采结果在实际完成后追加；不得用本地检查代替云端运行。
+- 云端新管线实际执行成功：[Actions 44282798378](https://github.com/ymh357/github-feed/actions/runs/44282798378)，业务run `3d831948-56e3-4a2e-8a04-f16cb821d30c`，2026-11-18 18:11:20–18:12:20北京时间，generated=6、failed=0、status=completed。包括gbrain、Rust、LangChain、RuView、agent-desktop的不同事件；不只是工作流绿色。
+- 加上此前三类发布验收，共新增9篇，可读207→216。线上POST /api/catalog HTTP200，generationStatus=completed/generated6/failed0，lastOutput为北京时间18:12:20。
+- 当前待整理358（含恢复项和新补采更新，不是已清空），失败7中6项正常待重试、1项源说明为空暂停；耗尽attempts>=3为0、processing0。不能把入队恢复当作成功发表。
+- 四个响应超限仓库真EOF核验完成：opencode901条（0→300→600→900→901）、openclaw289、plannotator231、arcane114，只有真EOF才建立正式基线。
+- 中间试跑曾按被复审否决的日期覆盖逻辑写入opencode基线；已备份并仅撤回该未充分核验基线，保留全部原始事件，随后从offset0完成901条全量核对再建立基线。最终代码不保留日期覆盖分支。
+- 正常同步发现Node原基线442993876当前官方标记prerelease=true；已留证条件撤回该指针，再真EOF续采535条建立正式基线448092812。没有改写历史文章或删除版本事件。
+- 后续正常同步run `a6ca3f11-c076-4718-9607-62e69e343800`为partial、failed0，原因仅为Electron历史仍分批续采（offset600）；Hugo与Syncthing已在第二轮完成。存续游标优先于普通同步，实库前三优先级断言及独立复审通过。不能把未完整历史报为completed。
+- 最终代码42f415f（核心77bfd89）已推送，生产部署 `dpl_9xa3AMSbweDuy6aU8NCGYs8ByZx1` 为READY并绑定github-feed-nine.vercel.app，首页接口和三份真实详情HTTP200。最终TypeScript、ESLint、本地及Vercel生产构建通过；没有新增测试文件或依赖。
+- 新hourly cron已提交且工作流active，本轮云端验收使用workflow_dispatch。尚未把一次未来自然schedule唤醒当作已观察事实；追赶仍依赖GitHub实际提供唤醒，没有固定时刻或永不漏跑的保证。
