@@ -94,7 +94,8 @@ export const store: StoreContract = {
 
   async getRepositoriesToSync(limit) {
     const rows = await queryRows(`SELECT * FROM repositories WHERE is_active = true OR admission_status='candidate'
-      ORDER BY COALESCE(last_sync_attempt_at,synced_at) + CASE WHEN pushed_at > now()-interval '14 days' THEN interval '0 hours' ELSE interval '12 hours' END ASC, id ASC LIMIT $1`, [boundedLimit(limit)]);
+      ORDER BY (is_active AND EXISTS(SELECT 1 FROM release_backfills b WHERE b.repository_id=repositories.id)) DESC,
+        COALESCE(last_sync_attempt_at,synced_at) + CASE WHEN pushed_at > now()-interval '14 days' THEN interval '0 hours' ELSE interval '12 hours' END ASC, id ASC LIMIT $1`, [boundedLimit(limit)]);
     return rows.map(mapRepository);
   },
 
