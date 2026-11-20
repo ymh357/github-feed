@@ -1,8 +1,8 @@
 import { getDb, LEARNING_EVENT_FILTER, type DbRow } from "./db";
 
-export const SCHEDULED_STAGES = ["generate", "sync", "discover"] as const;
+export const SCHEDULED_STAGES = ["discover", "sync", "generate"] as const;
 export type ScheduledStage = typeof SCHEDULED_STAGES[number];
-export const STAGE_INTERVAL_MS: Record<ScheduledStage, number> = { generate: 3 * 3600_000, sync: 6 * 3600_000, discover: 24 * 3600_000 };
+export const STAGE_INTERVAL_MS: Record<ScheduledStage, number> = { generate: 3 * 3600_000, sync: 6 * 3600_000, discover: 6 * 3600_000 };
 const RETRY_DELAY_MS = 45 * 60_000;
 const RUNNING_GRACE_MS = 35 * 60_000;
 

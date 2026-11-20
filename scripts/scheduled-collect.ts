@@ -87,7 +87,7 @@ const main = async (): Promise<void> => {
     || !Number.isSafeInteger(limit) || limit < 1 || limit > 200) throw new Error("调度阶段、深度或处理上限无效。");
   if (repository && (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository) || selectedStage === "discover")) throw new Error("定向仓库参数无效，发现阶段不接受指定仓库。");
   if (scheduled && (repository || selectedStage !== "all" || depth || args.includes("--discovery-only"))) throw new Error("定时追赶模式不接受人工定向或阶段限制。");
-  const order: readonly ScheduledStage[] = scheduled ? SCHEDULED_STAGES : ["discover", "sync", "generate"];
+  const order: readonly ScheduledStage[] = SCHEDULED_STAGES;
   const stages = order.filter((stage) => (selectedStage === "all" || selectedStage === stage)
     && !(args.includes("--discovery-only") && stage === "generate") && !(repository && stage === "discover"));
   const initial = await readStageSchedule();
