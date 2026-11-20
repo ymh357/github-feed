@@ -22,4 +22,14 @@
 - 同一现场时间固定重现：旧discover due=false，修复后due=true。
 - 六项inline守卫：发现到期、失败退避、租约、无新队列生成等待、有新队列立即生成、实际阶段顺序。
 - npx tsc --noEmit、npx eslint . --quiet、npm run build均通过；没有新增依赖或测试文件。
-- 已启动生产配置的真实scheduled-catch-up（limit50）；最终新收录、可读增量、部署结果在实际完成后追加。
+- 已执行生产配置的真实scheduled-catch-up（limit50），发现阶段到期并成功新增11项目；同步阶段按预算保留版本历史补采进度。
+
+## 生产结果
+
+- 修复提交a504837已推送；Vercel生产部署dpl_9tH7VTP6APyAMSBd6xCEj7sD2aSt为READY。
+- 发现运行f2a483af-953a-457d-8684-5979b1f9f9cd于11:34–11:37完成，新增11项目，包括MiniMind、Nginx、Transformers、Deno。这里是新收录，不是声称项目今天才创建。
+- 本地追赶的生成阶段03:41Z异常退出，未生成或领取内容；原始原因被现有安全错误摘要隐藏，未复现，不能据此断言具体网络或数据库故障。重新读取35项待处理成功，随后改由实际GitHub worker补跑。
+- GitHub Actions 44669615710成功结束；业务运行5fc0c714-84a8-4873-b272-fdfd38929759于11:44–11:48完成，34篇生成均为首次发布，infrastructureFailure=false；1项审核失败使业务状态为partial。
+- 最终公开API HTTP200、可读584（550→584，增加34），pending0、processing0、retryable1、资料暂停1；11个新项目中10个已可读。
+- IPTV缺少What/Why/How可核验引用，未发布，next_retry_at为12:45:37北京时间；已有claw-code版本摘要资料不足仍暂停。未为清空队列降低质量要求。
+- 公开首页HTML HTTP200，包含ready584、MiniMind及Nginx；内置浏览器仍未完成视觉核验，没有声称读到了用户本地页面或其筛选状态。
